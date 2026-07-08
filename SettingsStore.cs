@@ -62,6 +62,11 @@ public static class SettingsStore
             settings.FiveHourColor = AppSettings.DefaultFiveHourColor;
         }
 
+        if (!SettingsForm.IsValidHexColor(settings.TrackColor))
+        {
+            settings.TrackColor = AppSettings.DefaultTrackColor;
+        }
+
         if (!SettingsForm.IsValidHexColor(settings.TrackBorderColor))
         {
             settings.TrackBorderColor = AppSettings.DefaultTrackBorderColor;
@@ -69,6 +74,7 @@ public static class SettingsStore
 
         settings.SevenDayColor = settings.SevenDayColor.ToUpperInvariant();
         settings.FiveHourColor = settings.FiveHourColor.ToUpperInvariant();
+        settings.TrackColor = settings.TrackColor.ToUpperInvariant();
         settings.TrackBorderColor = settings.TrackBorderColor.ToUpperInvariant();
         return settings;
     }

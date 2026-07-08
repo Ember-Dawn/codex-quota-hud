@@ -17,9 +17,11 @@ public sealed class SettingsForm : Form
     private readonly ComboBox _autoRefreshCombo = new();
     private readonly TextBox _sevenDayColorBox = new();
     private readonly TextBox _fiveHourColorBox = new();
+    private readonly TextBox _trackColorBox = new();
     private readonly TextBox _trackBorderColorBox = new();
     private readonly Panel _sevenDaySwatch = new();
     private readonly Panel _fiveHourSwatch = new();
+    private readonly Panel _trackSwatch = new();
     private readonly Panel _trackBorderSwatch = new();
 
     public AppSettings ResultSettings { get; private set; }
@@ -33,7 +35,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(390, 258);
+        ClientSize = new Size(390, 288);
         BackColor = Color.FromArgb(245, 247, 250);
         Font = new Font(FontFamily.GenericSansSerif, 9f);
 
@@ -81,12 +83,13 @@ public sealed class SettingsForm : Form
 
         AddColorRow("7d Color", _sevenDayColorBox, _sevenDaySwatch, y: 132, addChangeButton: false);
         AddColorRow("5h Color", _fiveHourColorBox, _fiveHourSwatch, y: 162, addChangeButton: false);
-        AddColorRow("Track Border Color", _trackBorderColorBox, _trackBorderSwatch, y: 192, addChangeButton: true);
+        AddColorRow("Track Color", _trackColorBox, _trackSwatch, y: 192, addChangeButton: false);
+        AddColorRow("Track Border Color", _trackBorderColorBox, _trackBorderSwatch, y: 222, addChangeButton: true);
 
         var resetDefaultsButton = new Button
         {
             Text = "Reset Defaults",
-            Location = new Point(14, 226),
+            Location = new Point(14, 256),
             Size = new Size(110, 26)
         };
         resetDefaultsButton.Click += (_, _) => LoadFields(AppSettings.Default());
@@ -95,14 +98,14 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(254, 226),
+            Location = new Point(254, 256),
             Size = new Size(58, 26)
         };
 
         var saveButton = new Button
         {
             Text = "Save",
-            Location = new Point(318, 226),
+            Location = new Point(318, 256),
             Size = new Size(58, 26)
         };
         saveButton.Click += SaveButton_Click;
@@ -163,9 +166,11 @@ public sealed class SettingsForm : Form
         _autoRefreshCombo.SelectedIndex = optionIndex >= 0 ? optionIndex : 1;
         _sevenDayColorBox.Text = settings.SevenDayColor.ToUpperInvariant();
         _fiveHourColorBox.Text = settings.FiveHourColor.ToUpperInvariant();
+        _trackColorBox.Text = settings.TrackColor.ToUpperInvariant();
         _trackBorderColorBox.Text = settings.TrackBorderColor.ToUpperInvariant();
         UpdateSwatch(_sevenDayColorBox, _sevenDaySwatch);
         UpdateSwatch(_fiveHourColorBox, _fiveHourSwatch);
+        UpdateSwatch(_trackColorBox, _trackSwatch);
         UpdateSwatch(_trackBorderColorBox, _trackBorderSwatch);
     }
 
@@ -194,6 +199,7 @@ public sealed class SettingsForm : Form
     {
         if (!IsValidHexColor(_sevenDayColorBox.Text) ||
             !IsValidHexColor(_fiveHourColorBox.Text) ||
+            !IsValidHexColor(_trackColorBox.Text) ||
             !IsValidHexColor(_trackBorderColorBox.Text))
         {
             MessageBox.Show(this, "Invalid color value. Please use #RRGGBB format.", "Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -206,6 +212,7 @@ public sealed class SettingsForm : Form
             AutoRefreshSeconds = RefreshOptions[selectedIndex].Seconds,
             SevenDayColor = _sevenDayColorBox.Text.ToUpperInvariant(),
             FiveHourColor = _fiveHourColorBox.Text.ToUpperInvariant(),
+            TrackColor = _trackColorBox.Text.ToUpperInvariant(),
             TrackBorderColor = _trackBorderColorBox.Text.ToUpperInvariant()
         };
 

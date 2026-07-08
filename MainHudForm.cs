@@ -7,9 +7,8 @@ public sealed class MainHudForm : Form
 {
     private static readonly Color WindowBackColor = ColorTranslator.FromHtml("#181C22");
     private static readonly Color WindowBorderColor = ColorTranslator.FromHtml("#2E3640");
-    private static readonly Color TrackColor = ColorTranslator.FromHtml("#303740");
     private static readonly Color TextColor = ColorTranslator.FromHtml("#F2F4F8");
-    private static readonly Color MutedTextColor = ColorTranslator.FromHtml("#B8C0CC");
+    private static readonly Color MutedTextColor = ColorTranslator.FromHtml("#C8D0DA");
 
     private readonly CodexQuotaReader _reader = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
@@ -19,6 +18,7 @@ public sealed class MainHudForm : Form
     private readonly Panel _detailView = new();
     private readonly Panel _collapsedDockView = new();
     private readonly Label _titleLabel = new();
+    private readonly Label _statusLabel = new();
     private readonly Label _updatedLabel = new();
     private readonly Label _sevenDayLabel = new();
     private readonly Label _fiveHourLabel = new();
@@ -29,13 +29,13 @@ public sealed class MainHudForm : Form
     private readonly Label _sevenDayResetTimeLabel = new();
     private readonly Label _fiveHourResetPrefixLabel = new();
     private readonly Label _fiveHourResetTimeLabel = new();
-    private readonly Label _footerLabel = new();
     private readonly QuotaBarControl _collapsedSevenDayBar = new();
     private readonly QuotaBarControl _collapsedFiveHourBar = new();
 
     private AppSettings _settings;
     private Color _sevenDayColor;
     private Color _fiveHourColor;
+    private Color _trackColor;
     private Color _trackBorderColor;
     private QuotaSnapshot _snapshot = new();
     private bool _isDocked;
@@ -50,6 +50,7 @@ public sealed class MainHudForm : Form
         _settings = SettingsStore.Load();
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
+        _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
         _trackBorderColor = ColorTranslator.FromHtml(_settings.TrackBorderColor);
 
         Text = "Codex Quota HUD";
@@ -97,7 +98,7 @@ public sealed class MainHudForm : Form
     {
         base.OnPaint(e);
         var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
-        using var path = RoundedRect(bounds, 11);
+        using var path = RoundedRect(bounds, CurrentWindowRadius());
         using var pen = new Pen(WindowBorderColor, 1f);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         e.Graphics.DrawPath(pen, path);
@@ -131,7 +132,7 @@ public sealed class MainHudForm : Form
 
         Controls.Add(_detailView);
         Controls.Add(_collapsedDockView);
-        UpdateUi("Loading...");
+        UpdateUi(string.Empty);
     }
 
     private void BuildDetailView()
@@ -146,13 +147,17 @@ public sealed class MainHudForm : Form
         _titleLabel.Location = new Point(14, 9);
         _titleLabel.Size = new Size(180, 20);
 
+        ConfigureMetaLabel(_statusLabel, new Point(196, 9), new Size(102, 20));
+        _statusLabel.ForeColor = MutedTextColor;
+        _statusLabel.TextAlign = ContentAlignment.MiddleRight;
+
         ConfigureMetaLabel(_updatedLabel, new Point(306, 9), new Size(50, 20));
         _updatedLabel.ForeColor = MutedTextColor;
-        _updatedLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _updatedLabel.TextAlign = ContentAlignment.MiddleRight;
 
-        ConfigureMetaLabel(_sevenDayLabel, new Point(14, 39), new Size(32, 23));
+        ConfigureMetaLabel(_sevenDayLabel, new Point(14, 39), new Size(34, 23));
         _sevenDayLabel.Text = "7d";
-        ConfigureMetaLabel(_fiveHourLabel, new Point(14, 68), new Size(32, 23));
+        ConfigureMetaLabel(_fiveHourLabel, new Point(14, 68), new Size(34, 23));
         _fiveHourLabel.Text = "5h";
 
         ConfigureBar(_detailSevenDayBar, string.Empty, _sevenDayColor, showTitle: false, showPercentText: true);
@@ -167,20 +172,17 @@ public sealed class MainHudForm : Form
         _sevenDayResetPrefixLabel.Text = "R";
         ConfigureMetaLabel(_sevenDayResetDateLabel, new Point(248, 38), new Size(54, 23));
         ConfigureMetaLabel(_sevenDayResetTimeLabel, new Point(306, 38), new Size(50, 23));
+        _sevenDayResetTimeLabel.TextAlign = ContentAlignment.MiddleRight;
 
         ConfigureMetaLabel(_fiveHourResetPrefixLabel, new Point(230, 67), new Size(14, 23));
         _fiveHourResetPrefixLabel.Text = "R";
         ConfigureMetaLabel(_fiveHourResetTimeLabel, new Point(306, 67), new Size(50, 23));
-
-        _footerLabel.AutoSize = false;
-        _footerLabel.ForeColor = _fiveHourColor;
-        _footerLabel.Location = new Point(14, 88);
-        _footerLabel.Size = new Size(342, 16);
-        _footerLabel.Visible = false;
+        _fiveHourResetTimeLabel.TextAlign = ContentAlignment.MiddleRight;
 
         _detailView.Controls.AddRange(new Control[]
         {
             _titleLabel,
+            _statusLabel,
             _updatedLabel,
             _sevenDayLabel,
             _fiveHourLabel,
@@ -190,8 +192,7 @@ public sealed class MainHudForm : Form
             _sevenDayResetDateLabel,
             _sevenDayResetTimeLabel,
             _fiveHourResetPrefixLabel,
-            _fiveHourResetTimeLabel,
-            _footerLabel
+            _fiveHourResetTimeLabel
         });
     }
 
@@ -216,8 +217,9 @@ public sealed class MainHudForm : Form
     {
         bar.Title = title;
         bar.FillColor = fillColor;
-        bar.TrackColor = TrackColor;
+        bar.TrackColor = _trackColor;
         bar.TrackBorderColor = _trackBorderColor;
+        bar.TrackBorderWidth = 2f;
         bar.TextColor = TextColor;
         bar.BackColor = WindowBackColor;
         bar.ShowTitle = showTitle;
@@ -227,8 +229,8 @@ public sealed class MainHudForm : Form
     private static void ConfigureMetaLabel(Label label, Point location, Size size)
     {
         label.AutoSize = false;
-        label.Font = new Font(FontFamily.GenericSansSerif, 8.8f, FontStyle.Regular);
-        label.ForeColor = MutedTextColor;
+        label.Font = new Font(FontFamily.GenericSansSerif, 8.8f, FontStyle.Bold);
+        label.ForeColor = TextColor;
         label.TextAlign = ContentAlignment.MiddleLeft;
         label.Location = location;
         label.Size = size;
@@ -242,43 +244,36 @@ public sealed class MainHudForm : Form
         }
 
         _isRefreshing = true;
-        UpdateUi("Loading...");
+        UpdateUi("Refreshing...");
 
         try
         {
             _snapshot = await _reader.ReadAsync();
+            UpdateUi("Updated");
         }
         catch (Exception ex)
         {
             _snapshot = new QuotaParser().FromError(ex.Message);
+            UpdateUi("Failed");
         }
         finally
         {
             _isRefreshing = false;
-            UpdateUi();
         }
     }
 
-    private void UpdateUi(string? statusOverride = null)
+    private void UpdateUi(string? statusText = null)
     {
         _detailSevenDayBar.Percent = _snapshot.SevenDay.RemainingPercent;
         _detailFiveHourBar.Percent = _snapshot.FiveHour.RemainingPercent;
         _collapsedSevenDayBar.Percent = _snapshot.SevenDay.RemainingPercent;
         _collapsedFiveHourBar.Percent = _snapshot.FiveHour.RemainingPercent;
 
+        _statusLabel.Text = statusText ?? string.Empty;
         _updatedLabel.Text = _snapshot.UpdatedAt.ToString("HH:mm", CultureInfo.InvariantCulture);
         _sevenDayResetDateLabel.Text = FormatSevenDayResetDate(_snapshot.SevenDay.ResetAt);
         _sevenDayResetTimeLabel.Text = FormatResetTime(_snapshot.SevenDay.ResetAt);
         _fiveHourResetTimeLabel.Text = FormatResetTime(_snapshot.FiveHour.ResetAt);
-
-        var status = statusOverride;
-        if (status is null && !string.IsNullOrWhiteSpace(_snapshot.ErrorMessage))
-        {
-            status = $"Failed: {_snapshot.ErrorMessage}";
-        }
-
-        _footerLabel.Text = status ?? string.Empty;
-        _footerLabel.Visible = !string.IsNullOrWhiteSpace(status);
     }
 
     private static string FormatSevenDayResetDate(DateTime? resetAt)
@@ -296,6 +291,7 @@ public sealed class MainHudForm : Form
         _settings = settings.Clone();
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
+        _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
         _trackBorderColor = ColorTranslator.FromHtml(_settings.TrackBorderColor);
 
         _refreshTimer.Interval = Math.Max(1, _settings.AutoRefreshSeconds) * 1000;
@@ -303,11 +299,14 @@ public sealed class MainHudForm : Form
         _collapsedSevenDayBar.FillColor = _sevenDayColor;
         _detailFiveHourBar.FillColor = _fiveHourColor;
         _collapsedFiveHourBar.FillColor = _fiveHourColor;
+        _detailSevenDayBar.TrackColor = _trackColor;
+        _collapsedSevenDayBar.TrackColor = _trackColor;
+        _detailFiveHourBar.TrackColor = _trackColor;
+        _collapsedFiveHourBar.TrackColor = _trackColor;
         _detailSevenDayBar.TrackBorderColor = _trackBorderColor;
         _collapsedSevenDayBar.TrackBorderColor = _trackBorderColor;
         _detailFiveHourBar.TrackBorderColor = _trackBorderColor;
         _collapsedFiveHourBar.TrackBorderColor = _trackBorderColor;
-        _footerLabel.ForeColor = _fiveHourColor;
 
         if (save)
         {
@@ -351,6 +350,7 @@ public sealed class MainHudForm : Form
         Size = showDetail ? new Size(370, 104) : new Size(320, 32);
         _detailView.Visible = showDetail;
         _collapsedDockView.Visible = !showDetail;
+        ApplyRoundedRegion();
         Invalidate();
     }
 
@@ -497,9 +497,14 @@ public sealed class MainHudForm : Form
             return;
         }
 
-        using var path = RoundedRect(new Rectangle(0, 0, Width, Height), 11);
+        using var path = RoundedRect(new Rectangle(0, 0, Width, Height), CurrentWindowRadius());
         Region?.Dispose();
         Region = new Region(path);
+    }
+
+    private int CurrentWindowRadius()
+    {
+        return _isDocked && !_isExpanded ? 12 : 14;
     }
 
     private static GraphicsPath RoundedRect(Rectangle bounds, int radius)

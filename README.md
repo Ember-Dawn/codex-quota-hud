@@ -46,6 +46,7 @@ Current settings:
 - Auto refresh interval
 - 7d bar color
 - 5h bar color
+- Progress-bar track color
 - Progress-bar track border color
 
 ## Not included yet
