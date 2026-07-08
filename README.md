@@ -37,8 +37,18 @@ Override the executable path with:
 $env:CODEX_CLI_PATH = "C:\\path\\to\\codex.exe"
 ```
 
+## Settings
+
+Settings are saved to `%APPDATA%\CodexQuotaHud\settings.json`.
+
+Current settings:
+
+- Auto refresh interval
+- 7d bar color
+- 5h bar color
+- Progress-bar track border color
+
 ## Not included yet
 
 - Pace judgment
 - History analysis
-- Settings window

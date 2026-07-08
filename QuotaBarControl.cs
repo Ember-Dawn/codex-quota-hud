@@ -7,75 +7,65 @@ public sealed class QuotaBarControl : Control
     private string _title = string.Empty;
     private double? _percent;
     private bool _showPercentText = true;
+    private bool _showTitle = true;
     private Color _fillColor = ColorTranslator.FromHtml("#4EA1FF");
-    private Color _trackColor = ColorTranslator.FromHtml("#2A2F36");
+    private Color _trackColor = ColorTranslator.FromHtml("#303740");
+    private Color _trackBorderColor = ColorTranslator.FromHtml("#56606C");
     private Color _textColor = ColorTranslator.FromHtml("#F2F4F8");
 
     public QuotaBarControl()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-        Height = 24;
-        Font = new Font(FontFamily.GenericSansSerif, 9f, FontStyle.Bold);
+        Height = 22;
+        Font = new Font(FontFamily.GenericSansSerif, 8.5f, FontStyle.Bold);
     }
 
     public string Title
     {
         get => _title;
-        set
-        {
-            _title = value;
-            Invalidate();
-        }
+        set { _title = value; Invalidate(); }
     }
 
     public double? Percent
     {
         get => _percent;
-        set
-        {
-            _percent = value;
-            Invalidate();
-        }
+        set { _percent = value; Invalidate(); }
     }
 
     public bool ShowPercentText
     {
         get => _showPercentText;
-        set
-        {
-            _showPercentText = value;
-            Invalidate();
-        }
+        set { _showPercentText = value; Invalidate(); }
+    }
+
+    public bool ShowTitle
+    {
+        get => _showTitle;
+        set { _showTitle = value; Invalidate(); }
     }
 
     public Color FillColor
     {
         get => _fillColor;
-        set
-        {
-            _fillColor = value;
-            Invalidate();
-        }
+        set { _fillColor = value; Invalidate(); }
     }
 
     public Color TrackColor
     {
         get => _trackColor;
-        set
-        {
-            _trackColor = value;
-            Invalidate();
-        }
+        set { _trackColor = value; Invalidate(); }
+    }
+
+    public Color TrackBorderColor
+    {
+        get => _trackBorderColor;
+        set { _trackBorderColor = value; Invalidate(); }
     }
 
     public Color TextColor
     {
         get => _textColor;
-        set
-        {
-            _textColor = value;
-            Invalidate();
-        }
+        set { _textColor = value; Invalidate(); }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -84,10 +74,15 @@ public sealed class QuotaBarControl : Control
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         e.Graphics.Clear(BackColor);
 
-        var bounds = new Rectangle(0, 2, Width - 1, Height - 5);
+        var bounds = new Rectangle(1, 2, Width - 3, Height - 5);
+        if (bounds.Width <= 0 || bounds.Height <= 0)
+        {
+            return;
+        }
+
         using var trackBrush = new SolidBrush(TrackColor);
         using var fillBrush = new SolidBrush(FillColor);
-        using var textBrush = new SolidBrush(TextColor);
+        using var borderPen = new Pen(TrackBorderColor, 1f);
         using var trackPath = RoundedRect(bounds, bounds.Height / 2);
         e.Graphics.FillPath(trackBrush, trackPath);
 
@@ -104,21 +99,36 @@ public sealed class QuotaBarControl : Control
             }
         }
 
-        var text = ShowPercentText
-            ? $"{Title} {(Percent.HasValue ? $"{Percent.Value:0}%" : "--")}"
-            : Title;
+        e.Graphics.DrawPath(borderPen, trackPath);
 
-        TextRenderer.DrawText(
-            e.Graphics,
-            text,
-            Font,
-            bounds,
-            TextColor,
-            TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
+        var text = BuildText();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            TextRenderer.DrawText(
+                e.Graphics,
+                text,
+                Font,
+                bounds,
+                TextColor,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    private string BuildText()
+    {
+        var percentText = Percent.HasValue ? $"{Percent.Value:0}%" : "--";
+        return (ShowTitle, ShowPercentText) switch
+        {
+            (true, true) => $"{Title} {percentText}",
+            (true, false) => Title,
+            (false, true) => percentText,
+            _ => string.Empty
+        };
     }
 
     private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
     {
+        radius = Math.Max(1, Math.Min(radius, Math.Min(bounds.Width, bounds.Height) / 2));
         var diameter = radius * 2;
         var path = new GraphicsPath();
         path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
