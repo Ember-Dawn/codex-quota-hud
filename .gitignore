@@ -7,3 +7,11 @@ obj/
 *.rsuser
 *.log
 .DS_Store
+
+# Local publish outputs
+publish/
+artifacts/
+*.zip
+
+# Visual Studio / editor
+.vscode/
