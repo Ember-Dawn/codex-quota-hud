@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Management;
 using System.Text.RegularExpressions;
@@ -11,38 +10,53 @@ internal static class ProcessDiagnostics
 
     private static readonly HashSet<string> InterestingProcessNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "git",
+        "codex",
+        "CodexQuotaHud",
+        "CodexQuotaHud-win-x64-no-dotnet",
+        "CodexQuotaHud-win-x64-with-dotnet",
+        "agy",
+        "conhost",
         "cmd",
         "powershell",
         "pwsh",
-        "conhost",
-        "WindowsTerminal",
-        "wt",
+        "git",
+        "git-remote-https",
         "node",
-        "agy",
-        "codex",
-        "netstat"
+        "python",
+        "netstat",
+        "WindowsTerminal",
+        "wt"
     };
 
-    public static void LogInterestingProcesses(string reason)
+    public static void LogSnapshot(string provider, string phase, int? targetPid = null, string? reason = null)
     {
+        if (!DebugLogger.IsDiagnosticLoggingEnabled)
+        {
+            return;
+        }
+
         try
         {
             var processes = ReadInterestingProcesses();
-            DebugLogger.Log($"[AGY-DIAG] process snapshot reason={SanitizeField(reason)} count={processes.Count}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=snapshot count={processes.Count} targetPid={FormatNullable(targetPid)} reason={SanitizeField(reason)}");
             foreach (var process in processes.OrderBy(process => process.Name).ThenBy(process => process.ProcessId))
             {
-                DebugLogger.Log("[AGY-DIAG] process snapshot " + FormatProcess(reason, process));
+                DebugLogger.Log(FormatLogLine(provider, phase, "process", process, targetPid, reason));
             }
         }
         catch (Exception ex)
         {
-            DebugLogger.LogException("[AGY-DIAG] process snapshot failed", ex);
+            DebugLogger.LogException($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=snapshot-failed", ex);
         }
     }
 
-    public static async Task MonitorInterestingProcessesAsync(string reason, TimeSpan duration, TimeSpan interval, CancellationToken cancellationToken)
+    public static async Task MonitorAsync(string provider, string phase, int targetPid, TimeSpan duration, TimeSpan interval, CancellationToken cancellationToken, string? reason = null)
     {
+        if (!DebugLogger.IsDiagnosticLoggingEnabled)
+        {
+            return;
+        }
+
         try
         {
             var seen = new HashSet<int>();
@@ -53,26 +67,26 @@ internal static class ProcessDiagnostics
                 seen.Add(process.ProcessId);
             }
 
-            DebugLogger.Log($"[AGY-DIAG] process monitor start reason={SanitizeField(reason)} durationMs={(int)duration.TotalMilliseconds} intervalMs={(int)interval.TotalMilliseconds} initialCount={seen.Count}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-start targetPid={targetPid} durationMs={(int)duration.TotalMilliseconds} intervalMs={(int)interval.TotalMilliseconds} initialCount={seen.Count} reason={SanitizeField(reason)}");
 
-            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+            while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested && DebugLogger.IsDiagnosticLoggingEnabled)
             {
-                IReadOnlyList<ProcessInfo> processes;
+                IReadOnlyList<ProcessInfoSnapshot> processes;
                 try
                 {
                     processes = ReadInterestingProcesses();
                 }
                 catch (Exception ex)
                 {
-                    DebugLogger.LogException("[AGY-DIAG] process monitor read failed", ex);
-                    processes = Array.Empty<ProcessInfo>();
+                    DebugLogger.LogException($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-read-failed", ex);
+                    processes = Array.Empty<ProcessInfoSnapshot>();
                 }
 
                 foreach (var process in processes.OrderBy(process => process.ProcessId))
                 {
                     if (seen.Add(process.ProcessId))
                     {
-                        DebugLogger.Log("[AGY-DIAG] new process " + FormatProcess(reason, process));
+                        DebugLogger.Log(FormatLogLine(provider, phase, "new-process", process, targetPid, reason));
                     }
                 }
 
@@ -86,18 +100,40 @@ internal static class ProcessDiagnostics
                 }
             }
 
-            DebugLogger.Log($"[AGY-DIAG] process monitor stop reason={SanitizeField(reason)}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-stop targetPid={targetPid} reason={SanitizeField(reason)}");
         }
         catch (Exception ex)
         {
-            DebugLogger.LogException("[AGY-DIAG] process monitor failed", ex);
+            DebugLogger.LogException($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-failed", ex);
         }
     }
 
-    private static IReadOnlyList<ProcessInfo> ReadInterestingProcesses()
+    public static string SanitizeForLog(string? value, int maxLength = MaxCommandLineLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "?";
+        }
+
+        try
+        {
+            var sanitized = value.ReplaceLineEndings(" ").Replace('\t', ' ').Trim();
+            sanitized = Regex.Replace(sanitized, "\\s+", " ");
+            sanitized = Regex.Replace(sanitized, "(?i)(csrf_token|csrf|authorization|access_token|refresh_token|id_token|token|api[_-]?key|password|passwd|credential|secret)(\\s*[=:]\\s*)(\\\"[^\\\"]*\\\"|'[^']*'|\\S+)", "$1$2[redacted]");
+            sanitized = Regex.Replace(sanitized, "(?i)(Authorization:\\s*)\\S+", "$1[redacted]");
+            sanitized = Regex.Replace(sanitized, "(?i)(bearer)\\s+\\S+", "$1 [redacted]");
+            return sanitized.Length <= maxLength ? sanitized : sanitized[..maxLength] + "...";
+        }
+        catch
+        {
+            return "?";
+        }
+    }
+
+    private static IReadOnlyList<ProcessInfoSnapshot> ReadInterestingProcesses()
     {
         var byPid = ReadWmiProcessInfo();
-        var results = new List<ProcessInfo>();
+        var results = new List<ProcessInfoSnapshot>();
 
         foreach (var process in Process.GetProcesses())
         {
@@ -115,24 +151,26 @@ internal static class ProcessDiagnostics
                     continue;
                 }
 
-                if (!InterestingProcessNames.Contains(processName))
+                byPid.TryGetValue(processId, out var wmi);
+                var wmiName = Path.GetFileNameWithoutExtension(wmi?.Name ?? string.Empty);
+                if (!IsInteresting(processName) && !IsInteresting(wmiName))
                 {
                     continue;
                 }
 
-                byPid.TryGetValue(processId, out var wmi);
                 var path = wmi?.ExecutablePath ?? SafeReadPath(process);
                 var startTime = SafeReadStartTime(process);
                 var parentName = wmi?.ParentProcessId is int parentPid ? ReadParentName(parentPid, byPid) : null;
 
-                results.Add(new ProcessInfo(
+                results.Add(new ProcessInfoSnapshot(
                     processId,
-                    processName,
+                    string.IsNullOrWhiteSpace(wmiName) ? processName : wmiName,
                     wmi?.ParentProcessId,
                     parentName,
                     path,
-                    SanitizeCommandLine(wmi?.CommandLine),
-                    startTime));
+                    SanitizeForLog(wmi?.CommandLine),
+                    startTime,
+                    BuildParentChain(processId, byPid)));
             }
         }
 
@@ -169,10 +207,79 @@ internal static class ProcessDiagnostics
         }
         catch (Exception ex)
         {
-            DebugLogger.LogException("[AGY-DIAG] WMI process query failed", ex);
+            DebugLogger.LogException("[PROCESS-DIAG] provider=app phase=wmi event=query-failed", ex);
         }
 
         return processes;
+    }
+
+    private static IReadOnlyList<int> BuildParentChain(int processId, Dictionary<int, WmiProcessInfo> byPid)
+    {
+        var chain = new List<int>();
+        var seen = new HashSet<int> { processId };
+        var current = processId;
+
+        for (var i = 0; i < 64; i++)
+        {
+            if (!byPid.TryGetValue(current, out var info) || info.ParentProcessId is not int parentPid || parentPid <= 0)
+            {
+                break;
+            }
+
+            chain.Add(parentPid);
+            if (!seen.Add(parentPid))
+            {
+                break;
+            }
+
+            current = parentPid;
+        }
+
+        return chain;
+    }
+
+    private static string DetermineRelation(string provider, ProcessInfoSnapshot process, int? targetPid)
+    {
+        if (targetPid.HasValue)
+        {
+            if (process.ProcessId == targetPid.Value)
+            {
+                return "target";
+            }
+
+            if (process.ParentChain.Contains(targetPid.Value))
+            {
+                return "descendant";
+            }
+        }
+
+        return IsProviderRelated(provider, process) ? "related" : "unrelated";
+    }
+
+    private static bool IsProviderRelated(string provider, ProcessInfoSnapshot process)
+    {
+        if (provider.Equals("codex", StringComparison.OrdinalIgnoreCase))
+        {
+            return process.Name.Contains("codex", StringComparison.OrdinalIgnoreCase) || process.CommandLine.Contains("codex", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (provider.Equals("agy", StringComparison.OrdinalIgnoreCase))
+        {
+            return process.Name.Equals("agy", StringComparison.OrdinalIgnoreCase) || process.CommandLine.Contains("agy", StringComparison.OrdinalIgnoreCase) || process.CommandLine.Contains("antigravity", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static string FormatLogLine(string provider, string phase, string eventName, ProcessInfoSnapshot process, int? targetPid, string? reason)
+    {
+        var relation = DetermineRelation(provider, process, targetPid);
+        return $"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event={SanitizeField(eventName)} relation={relation} targetPid={FormatNullable(targetPid)} reason={SanitizeField(reason)} name={SanitizeField(process.Name)} pid={process.ProcessId} ppid={FormatNullable(process.ParentProcessId)} parent={SanitizeField(process.ParentName)} path={SanitizeField(process.ExecutablePath)} start={FormatDateTime(process.StartTime)} cmd=\"{SanitizeField(process.CommandLine)}\"";
+    }
+
+    private static bool IsInteresting(string processName)
+    {
+        return !string.IsNullOrWhiteSpace(processName) && InterestingProcessNames.Contains(processName);
     }
 
     private static string? ReadParentName(int parentProcessId, Dictionary<int, WmiProcessInfo> byPid)
@@ -217,56 +324,11 @@ internal static class ProcessDiagnostics
         }
     }
 
-    private static string FormatProcess(string reason, ProcessInfo process)
-    {
-        return $"reason={SanitizeField(reason)} name={SanitizeField(process.Name)} pid={process.ProcessId} ppid={FormatNullable(process.ParentProcessId)} parent={SanitizeField(process.ParentName)} path={SanitizeField(process.ExecutablePath)} start={FormatDateTime(process.StartTime)} cmd=\"{SanitizeField(process.CommandLine)}\"";
-    }
-
-    private static string SanitizeCommandLine(string? commandLine)
-    {
-        if (string.IsNullOrWhiteSpace(commandLine))
-        {
-            return "?";
-        }
-
-        try
-        {
-            var sanitized = commandLine.ReplaceLineEndings(" ").Replace('\t', ' ').Trim();
-            sanitized = Regex.Replace(sanitized, "\\s+", " ");
-            sanitized = Regex.Replace(sanitized, "(?i)(csrf_token|csrf|authorization|access_token|refresh_token|id_token|token|api[_-]?key|password|secret)(\\s*[=:]\\s*)(\\\"[^\\\"]*\\\"|'[^']*'|\\S+)", "$1$2***");
-            sanitized = Regex.Replace(sanitized, "(?i)(bearer)\\s+\\S+", "$1 ***");
-            return sanitized.Length <= MaxCommandLineLength ? sanitized : sanitized[..MaxCommandLineLength] + "...";
-        }
-        catch
-        {
-            return "?";
-        }
-    }
-
-    private static string SanitizeField(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "?";
-        }
-
-        try
-        {
-            value = value.ReplaceLineEndings(" ").Replace('\t', ' ').Trim();
-            value = Regex.Replace(value, "\\s+", " ");
-            return value.Length <= MaxCommandLineLength ? value : value[..MaxCommandLineLength] + "...";
-        }
-        catch
-        {
-            return "?";
-        }
-    }
+    private static string SanitizeField(string? value) => SanitizeForLog(value);
 
     private static string FormatNullable(int? value) => value?.ToString() ?? "?";
 
     private static string FormatDateTime(DateTime? value) => value?.ToString("yyyy-MM-dd HH:mm:ss.fff") ?? "?";
 
     private sealed record WmiProcessInfo(int ProcessId, int? ParentProcessId, string Name, string? ExecutablePath, string? CommandLine);
-
-    private sealed record ProcessInfo(int ProcessId, string Name, int? ParentProcessId, string? ParentName, string? ExecutablePath, string CommandLine, DateTime? StartTime);
 }

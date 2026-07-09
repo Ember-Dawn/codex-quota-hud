@@ -38,13 +38,25 @@ public sealed class CodexQuotaReader
         process.StartInfo.ArgumentList.Add("app-server");
         process.StartInfo.ArgumentList.Add("--listen");
         process.StartInfo.ArgumentList.Add("stdio://");
+        ApplyGitNonInteractiveEnvironment(process.StartInfo);
+        DebugLogger.Log("[CODEX-DIAG] codex git non-interactive env applied");
 
         var stderr = new StringBuilder();
 
         try
         {
+            ProcessDiagnostics.LogSnapshot("codex", "before-start", reason: "before-codex-start");
             process.Start();
             DebugLogger.Log($"[CODEX-DIAG] codex app-server started pid={process.Id}");
+            ProcessDiagnostics.LogSnapshot("codex", "after-start", process.Id, "immediately-after-codex-start");
+            _ = Task.Run(() => ProcessDiagnostics.MonitorAsync(
+                provider: "codex",
+                phase: "monitor",
+                targetPid: process.Id,
+                duration: TimeSpan.FromSeconds(30),
+                interval: TimeSpan.FromMilliseconds(500),
+                cancellationToken: CancellationToken.None,
+                reason: "after-codex-start"));
         }
         catch (Exception ex)
         {
@@ -145,7 +157,9 @@ public sealed class CodexQuotaReader
         }
         finally
         {
+            LogBeforeKill(process);
             TryKill(process);
+            LogAfterKill(process);
             try
             {
                 await stderrTask.WaitAsync(TimeSpan.FromMilliseconds(500));
@@ -160,6 +174,15 @@ public sealed class CodexQuotaReader
                 DebugLogger.Log("[CODEX-DIAG] stderr: " + Shorten(stderrText, 2000));
             }
         }
+    }
+
+    private static void ApplyGitNonInteractiveEnvironment(ProcessStartInfo startInfo)
+    {
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        startInfo.Environment["GCM_INTERACTIVE"] = "false";
+        startInfo.Environment["GCM_GUI_PROMPT"] = "false";
+        startInfo.Environment["GIT_ASKPASS"] = string.Empty;
+        startInfo.Environment["SSH_ASKPASS"] = string.Empty;
     }
 
     private static string ResolveCodexPath()
@@ -242,6 +265,20 @@ public sealed class CodexQuotaReader
         throw new InvalidOperationException(Shorten(error.ToString(), 300));
     }
 
+    private static void LogBeforeKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                ProcessDiagnostics.LogSnapshot("codex", "before-kill", process.Id, "before-codex-kill");
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private static void TryKill(Process process)
     {
         try
@@ -252,6 +289,17 @@ public sealed class CodexQuotaReader
                 process.Kill(entireProcessTree: true);
                 DebugLogger.Log($"[CODEX-DIAG] codex app-server killed pid={pid}");
             }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void LogAfterKill(Process process)
+    {
+        try
+        {
+            ProcessDiagnostics.LogSnapshot("codex", "after-kill", process.Id, "after-codex-kill");
         }
         catch
         {

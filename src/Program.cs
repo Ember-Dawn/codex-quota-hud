@@ -6,6 +6,18 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainHudForm());
+        try
+        {
+            Application.Run(new MainHudForm());
+        }
+        catch (Exception ex)
+        {
+            DebugLogger.Error("ERROR", "unhandled exception", ex);
+            throw;
+        }
+        finally
+        {
+            DebugLogger.Shutdown();
+        }
     }
 }

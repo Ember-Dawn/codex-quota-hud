@@ -79,19 +79,50 @@ public sealed class QuotaPoller : IAsyncDisposable
                 return Array.Empty<ProviderQuotaSnapshot>();
             }
 
-            var tasks = new List<Task<ProviderQuotaSnapshot>>
+            var snapshots = new List<ProviderQuotaSnapshot>();
+
+            try
             {
-                _codexProvider.RefreshAsync(cancellationToken)
-            };
+                snapshots.Add(await _codexProvider.RefreshAsync(cancellationToken).ConfigureAwait(false));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.LogException("[CODEX-DIAG] codex refresh failed unexpectedly", ex);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (_settings.EnableAntigravity)
             {
                 _agyProvider ??= new ManagedAgyQuotaProvider(_settings);
                 _agyProvider.ApplySettings(_settings);
-                tasks.Add(_agyProvider.RefreshAsync(cancellationToken));
+
+                if (_agyProvider.NeedsColdStart)
+                {
+                    DebugLogger.Log("[PROCESS-DIAG] provider=agy phase=cold-start-delay event=start delayMs=2000 reason=avoid-codex-agy-start-overlap");
+                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                    DebugLogger.Log("[PROCESS-DIAG] provider=agy phase=cold-start-delay event=stop delayMs=2000 reason=avoid-codex-agy-start-overlap");
+                }
+
+                try
+                {
+                    snapshots.Add(await _agyProvider.RefreshAsync(cancellationToken).ConfigureAwait(false));
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    DebugLogger.LogException("[AGY-DIAG] agy refresh failed unexpectedly", ex);
+                }
             }
 
-            return await Task.WhenAll(tasks);
+            return snapshots;
         }
         finally
         {

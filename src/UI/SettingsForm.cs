@@ -16,6 +16,7 @@ public sealed class SettingsForm : Form
 
     private readonly ComboBox _autoRefreshCombo = new();
     private readonly CheckBox _enableAntigravityCheck = new();
+    private readonly CheckBox _enableDiagnosticLoggingCheck = new();
     private readonly TextBox _sevenDayColorBox = new();
     private readonly TextBox _fiveHourColorBox = new();
     private readonly TextBox _trackColorBox = new();
@@ -37,7 +38,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(334, 322);
+        ClientSize = new Size(334, 354);
         BackColor = Color.FromArgb(245, 247, 250);
         Font = new Font(FontFamily.GenericSansSerif, 9f);
 
@@ -89,23 +90,27 @@ public sealed class SettingsForm : Form
         _enableAntigravityCheck.Location = new Point(14, 106);
         _enableAntigravityCheck.Size = new Size(180, 24);
 
+        _enableDiagnosticLoggingCheck.Text = "Enable diagnostic logging";
+        _enableDiagnosticLoggingCheck.Location = new Point(14, 134);
+        _enableDiagnosticLoggingCheck.Size = new Size(220, 24);
+
         var colorsLabel = new Label
         {
             Text = "Colors",
             Font = new Font(FontFamily.GenericSansSerif, 9f, FontStyle.Bold),
-            Location = new Point(14, 138),
+            Location = new Point(14, 170),
             Size = new Size(120, 20)
         };
 
-        AddColorRow("7d Color", _sevenDayColorBox, _sevenDaySwatch, y: 164);
-        AddColorRow("5h Color", _fiveHourColorBox, _fiveHourSwatch, y: 194);
-        AddColorRow("Track Color", _trackColorBox, _trackSwatch, y: 224);
-        AddColorRow("Track Border", _trackBorderColorBox, _trackBorderSwatch, y: 254);
+        AddColorRow("7d Color", _sevenDayColorBox, _sevenDaySwatch, y: 196);
+        AddColorRow("5h Color", _fiveHourColorBox, _fiveHourSwatch, y: 226);
+        AddColorRow("Track Color", _trackColorBox, _trackSwatch, y: 256);
+        AddColorRow("Track Border", _trackBorderColorBox, _trackBorderSwatch, y: 286);
 
         var resetDefaultsButton = new Button
         {
             Text = "Reset Defaults",
-            Location = new Point(14, 290),
+            Location = new Point(14, 322),
             Size = new Size(110, 26)
         };
         resetDefaultsButton.Click += (_, _) => LoadFields(AppSettings.Default());
@@ -114,14 +119,14 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(198, 290),
+            Location = new Point(198, 322),
             Size = new Size(58, 26)
         };
 
         var saveButton = new Button
         {
             Text = "Save",
-            Location = new Point(262, 290),
+            Location = new Point(262, 322),
             Size = new Size(58, 26)
         };
         saveButton.Click += SaveButton_Click;
@@ -135,6 +140,7 @@ public sealed class SettingsForm : Form
             autoRefreshLabel,
             _autoRefreshCombo,
             _enableAntigravityCheck,
+            _enableDiagnosticLoggingCheck,
             colorsLabel,
             resetDefaultsButton,
             cancelButton,
@@ -171,6 +177,7 @@ public sealed class SettingsForm : Form
         var optionIndex = Array.FindIndex(RefreshOptions, option => option.Seconds == settings.AutoRefreshSeconds);
         _autoRefreshCombo.SelectedIndex = optionIndex >= 0 ? optionIndex : 1;
         _enableAntigravityCheck.Checked = settings.EnableAntigravity;
+        _enableDiagnosticLoggingCheck.Checked = settings.EnableDiagnosticLogging;
         _sevenDayColorBox.Text = settings.SevenDayColor.ToUpperInvariant();
         _fiveHourColorBox.Text = settings.FiveHourColor.ToUpperInvariant();
         _trackColorBox.Text = settings.TrackColor.ToUpperInvariant();
@@ -223,6 +230,7 @@ public sealed class SettingsForm : Form
             TrackColor = _trackColorBox.Text.ToUpperInvariant(),
             TrackBorderColor = _trackBorderColorBox.Text.ToUpperInvariant(),
             EnableAntigravity = _enableAntigravityCheck.Checked,
+            EnableDiagnosticLogging = _enableDiagnosticLoggingCheck.Checked,
             AntigravityMode = AppSettings.DefaultAntigravityMode,
             StartAgyHidden = true,
             CloseManagedAgyOnExit = true,

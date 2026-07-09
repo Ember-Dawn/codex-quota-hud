@@ -15,6 +15,7 @@ public sealed class AppSettings
     public string TrackColor { get; set; } = DefaultTrackColor;
     public string TrackBorderColor { get; set; } = DefaultTrackBorderColor;
     public bool EnableAntigravity { get; set; }
+    public bool EnableDiagnosticLogging { get; set; } = true;
     public string AntigravityMode { get; set; } = DefaultAntigravityMode;
     public bool StartAgyHidden { get; set; } = true;
     public bool CloseManagedAgyOnExit { get; set; } = true;
@@ -32,6 +33,7 @@ public sealed class AppSettings
             TrackColor = TrackColor,
             TrackBorderColor = TrackBorderColor,
             EnableAntigravity = EnableAntigravity,
+            EnableDiagnosticLogging = EnableDiagnosticLogging,
             AntigravityMode = AntigravityMode,
             StartAgyHidden = StartAgyHidden,
             CloseManagedAgyOnExit = CloseManagedAgyOnExit,

@@ -40,6 +40,9 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
     public string ProviderId => "agy";
     public string DisplayName => "AGY";
     public bool IsEnabled => _settings.EnableAntigravity;
+    public bool IsProcessRunning => _process.IsRunning;
+    public bool HasCachedEndpoint => _port.HasValue;
+    public bool NeedsColdStart => !_process.IsRunning && !_port.HasValue;
 
     public void ApplySettings(AppSettings settings)
     {
@@ -70,6 +73,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         if (_port is null && !_process.IsRunning && IsEndpointDiscoveryBackedOff())
         {
             DebugLogger.Log($"[AGY-DIAG] endpoint discovery skipped by backoff next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=skipped-by-backoff next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
             return FailureSnapshot(QuotaProviderStatus.Offline, EndpointNotReadyMessage);
         }
 
@@ -132,6 +136,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
             catch (Exception ex)
             {
                 DebugLogger.Log($"[AGY-DIAG] read from cached port failed port={_port.Value} error={Shorten(ex.Message, 180)}");
+                DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=cached-port-failed targetPid={processId} port={_port.Value} error={Shorten(ex.Message, 180)}");
                 _port = null;
             }
         }
@@ -139,10 +144,12 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         if (IsEndpointDiscoveryBackedOff())
         {
             DebugLogger.Log($"[AGY-DIAG] endpoint discovery skipped by backoff next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=skipped-by-backoff targetPid={processId} next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
             throw new AgyEndpointNotReadyException();
         }
 
         DebugLogger.Log($"[AGY-DIAG] endpoint discovery start agyPid={processId}");
+        DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=start targetPid={processId}");
         var discovered = await DiscoverReadyEndpointAsync(processId, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
         if (discovered is null)
         {
@@ -153,6 +160,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         _port = discovered.Value.Port;
         ResetEndpointFailures();
         DebugLogger.Log($"[AGY-DIAG] endpoint ready agyPid={processId} port={_port}");
+        DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=ready targetPid={processId} port={_port}");
         return discovered.Value.Snapshot;
     }
 
@@ -236,6 +244,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         };
         _nextEndpointDiscoveryAt = DateTime.UtcNow + delay;
         DebugLogger.Log($"[AGY-DIAG] endpoint discovery failed agyPid={processId} failureCount={_endpointFailureCount}");
+        DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=failed targetPid={processId} failureCount={_endpointFailureCount} next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
 
         if (_endpointNotReadyCount >= 3)
         {

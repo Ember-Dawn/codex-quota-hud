@@ -28,8 +28,10 @@ public static class AgyEndpointDiscovery
         try
         {
             DebugLogger.Log($"[AGY-DIAG] netstat start for pid={processId}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=netstat-start targetPid={processId}");
             process.Start();
             DebugLogger.Log($"[AGY-DIAG] netstat started pid={process.Id}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=netstat-started targetPid={processId} netstatPid={process.Id}");
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
@@ -37,6 +39,7 @@ public static class AgyEndpointDiscovery
             _ = await stderrTask;
             var ports = ParseNetstatPorts(output, processId);
             DebugLogger.Log($"[AGY-DIAG] netstat exit code={process.ExitCode} ports={string.Join(',', ports)}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=netstat-exit targetPid={processId} exitCode={process.ExitCode} ports={string.Join(',', ports)}");
             return ports;
         }
         catch (OperationCanceledException)
@@ -47,12 +50,14 @@ public static class AgyEndpointDiscovery
         catch (TimeoutException)
         {
             DebugLogger.Log($"[AGY-DIAG] netstat timeout for pid={processId}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=netstat-timeout targetPid={processId}");
             TryKill(process);
             return Array.Empty<int>();
         }
         catch (Exception ex)
         {
             DebugLogger.Log($"[AGY-DIAG] netstat failed error={Shorten(ex.Message, 180)}");
+            DebugLogger.Log($"[PROCESS-DIAG] provider=agy phase=endpoint-discovery event=netstat-failed targetPid={processId} error={Shorten(ex.Message, 180)}");
             TryKill(process);
             return Array.Empty<int>();
         }

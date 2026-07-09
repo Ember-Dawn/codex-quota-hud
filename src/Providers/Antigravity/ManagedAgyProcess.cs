@@ -63,8 +63,8 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
                 RedirectStandardInput = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                CreateNoWindow = _settings.StartAgyHidden,
-                WindowStyle = _settings.StartAgyHidden ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
                 WorkingDirectory = workingDirectory,
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8
@@ -77,27 +77,30 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
             DebugLogger.Log("[AGY-DIAG] ensure running");
             DebugLogger.Log($"[AGY-DIAG] agy path={agyPath}");
             DebugLogger.Log($"[AGY-DIAG] working dir={workingDirectory}");
-            DebugLogger.Log($"[AGY-DIAG] start hidden={_settings.StartAgyHidden}");
+            DebugLogger.Log($"[AGY-DIAG] start hidden=True");
             DebugLogger.Log($"[AGY-DIAG] CreateNoWindow={process.StartInfo.CreateNoWindow} WindowStyle={process.StartInfo.WindowStyle}");
-            ProcessDiagnostics.LogInterestingProcesses("before-agy-start");
+            ProcessDiagnostics.LogSnapshot("agy", "before-start", reason: "before-agy-start");
 
             cancellationToken.ThrowIfCancellationRequested();
             process.Start();
             DebugLogger.Log($"[AGY-DIAG] agy managed process started pid={process.Id}");
-            ProcessDiagnostics.LogInterestingProcesses("immediately-after-agy-start");
-            _ = Task.Run(() => ProcessDiagnostics.MonitorInterestingProcessesAsync(
-                reason: $"after-agy-start pid={process.Id}",
+            ProcessDiagnostics.LogSnapshot("agy", "after-start", process.Id, "immediately-after-agy-start");
+            _ = Task.Run(() => ProcessDiagnostics.MonitorAsync(
+                provider: "agy",
+                phase: "monitor",
+                targetPid: process.Id,
                 duration: TimeSpan.FromSeconds(30),
                 interval: TimeSpan.FromMilliseconds(500),
-                cancellationToken: CancellationToken.None));
+                cancellationToken: CancellationToken.None,
+                reason: "after-agy-start"));
 
             _process = process;
             _executablePath = agyPath;
             _workingDirectory = workingDirectory;
             _startTime = SafeReadStartTime(process);
             _wasStartedByHud = true;
-            _stdoutDrainTask = DrainAsync(process.StandardOutput, cancellationToken);
-            _stderrDrainTask = DrainAsync(process.StandardError, cancellationToken);
+            _stdoutDrainTask = DrainAsync(process.StandardOutput, "[AGY-STDOUT]", cancellationToken);
+            _stderrDrainTask = DrainAsync(process.StandardError, "[AGY-STDERR]", cancellationToken);
             return AgyProcessStartResult.Running(process.Id, wasStartedNow: true);
         }
         catch (OperationCanceledException)
@@ -137,11 +140,13 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
             {
                 var pid = process.Id;
                 DebugLogger.Log($"[AGY-DIAG] stopping managed agy pid={pid}");
+                ProcessDiagnostics.LogSnapshot("agy", "before-shutdown", pid, "stopping-managed-agy");
                 process.Kill(entireProcessTree: true);
                 try
                 {
                     await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
                     DebugLogger.Log($"[AGY-DIAG] stopped managed agy pid={pid}");
+                    ProcessDiagnostics.LogSnapshot("agy", "after-shutdown", pid, "stopped-managed-agy");
                 }
                 catch (TimeoutException)
                 {
@@ -236,7 +241,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
         return startTimeMatches && pathMatches;
     }
 
-    private static async Task DrainAsync(StreamReader reader, CancellationToken cancellationToken)
+    private static async Task DrainAsync(StreamReader reader, string prefix, CancellationToken cancellationToken)
     {
         try
         {
@@ -246,6 +251,12 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
                 if (line is null)
                 {
                     break;
+                }
+
+                var sanitized = ProcessDiagnostics.SanitizeForLog(line, 300);
+                if (!string.IsNullOrWhiteSpace(sanitized) && sanitized != "?")
+                {
+                    DebugLogger.Log($"{prefix} {sanitized}");
                 }
             }
         }

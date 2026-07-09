@@ -40,6 +40,7 @@ public sealed class MainHudForm : Form
     public MainHudForm()
     {
         _settings = SettingsStore.Load();
+        DebugLogger.Initialize(_settings);
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
         _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
@@ -300,6 +301,7 @@ public sealed class MainHudForm : Form
         }
 
         _settings = settings.Clone();
+        DebugLogger.ApplySettings(_settings);
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
         _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
@@ -729,14 +731,7 @@ public sealed class MainHudForm : Form
 
     private static void AppendLog(string message)
     {
-        try
-        {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, System.Text.Encoding.UTF8);
-        }
-        catch
-        {
-        }
+        DebugLogger.Info("APP", message);
     }
 
     private static string Shorten(string text)
