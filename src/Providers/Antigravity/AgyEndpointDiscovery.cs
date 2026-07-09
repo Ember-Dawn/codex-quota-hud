@@ -27,13 +27,17 @@ public static class AgyEndpointDiscovery
 
         try
         {
+            DebugLogger.Log($"[AGY-DIAG] netstat start for pid={processId}");
             process.Start();
+            DebugLogger.Log($"[AGY-DIAG] netstat started pid={process.Id}");
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
             var output = await stdoutTask;
             _ = await stderrTask;
-            return ParseNetstatPorts(output, processId);
+            var ports = ParseNetstatPorts(output, processId);
+            DebugLogger.Log($"[AGY-DIAG] netstat exit code={process.ExitCode} ports={string.Join(',', ports)}");
+            return ports;
         }
         catch (OperationCanceledException)
         {
@@ -42,11 +46,13 @@ public static class AgyEndpointDiscovery
         }
         catch (TimeoutException)
         {
+            DebugLogger.Log($"[AGY-DIAG] netstat timeout for pid={processId}");
             TryKill(process);
             return Array.Empty<int>();
         }
-        catch
+        catch (Exception ex)
         {
+            DebugLogger.Log($"[AGY-DIAG] netstat failed error={Shorten(ex.Message, 180)}");
             TryKill(process);
             return Array.Empty<int>();
         }
@@ -91,6 +97,12 @@ public static class AgyEndpointDiscovery
         }
 
         return ports.OrderBy(port => port).ToArray();
+    }
+
+    private static string Shorten(string text, int maxLength)
+    {
+        text = text.Trim().ReplaceLineEndings(" ");
+        return text.Length <= maxLength ? text : text[..maxLength] + "...";
     }
 
     private static bool TryReadPort(string localAddress, out int port)

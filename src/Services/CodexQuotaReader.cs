@@ -15,7 +15,7 @@ public sealed class CodexQuotaReader
     public async Task<QuotaSnapshot> ReadAsync(CancellationToken cancellationToken = default)
     {
         var codexPath = ResolveCodexPath();
-        AppendLog($"codex provider starting app-server path={codexPath}");
+        DebugLogger.Log($"[CODEX-DIAG] starting codex app-server path={codexPath}");
 
         using var timeoutCts = new CancellationTokenSource(TimeoutMilliseconds);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
@@ -44,10 +44,11 @@ public sealed class CodexQuotaReader
         try
         {
             process.Start();
+            DebugLogger.Log($"[CODEX-DIAG] codex app-server started pid={process.Id}");
         }
         catch (Exception ex)
         {
-            AppendLog($"start error: {ex.Message}");
+            DebugLogger.Log($"[CODEX-DIAG] start error: {Shorten(ex.Message, 180)}");
             throw new InvalidOperationException(codexPath == "codex" ? "codex not found" : $"failed to start codex: {ex.Message}", ex);
         }
 
@@ -117,10 +118,10 @@ public sealed class CodexQuotaReader
 
                     if (!sawInitialize)
                     {
-                        AppendLog("id=2 received before id=1");
+                        DebugLogger.Log("[CODEX-DIAG] id=2 received before id=1");
                     }
 
-                    AppendLog("codex rate limit response received");
+                    DebugLogger.Log("[CODEX-DIAG] codex rate limit response received");
                     ThrowIfError(root);
 
                     if (!root.TryGetProperty("result", out var result))
@@ -134,12 +135,12 @@ public sealed class CodexQuotaReader
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            AppendLog("error: app-server timeout");
+            DebugLogger.Log("[CODEX-DIAG] error: app-server timeout");
             throw new TimeoutException("app-server timeout");
         }
         catch (Exception ex)
         {
-            AppendLog($"error: {ex.Message}");
+            DebugLogger.Log($"[CODEX-DIAG] error: {Shorten(ex.Message, 180)}");
             throw;
         }
         finally
@@ -156,7 +157,7 @@ public sealed class CodexQuotaReader
             var stderrText = stderr.ToString().Trim();
             if (!string.IsNullOrWhiteSpace(stderrText))
             {
-                AppendLog("stderr: " + Shorten(stderrText, 2000));
+                DebugLogger.Log("[CODEX-DIAG] stderr: " + Shorten(stderrText, 2000));
             }
         }
     }
@@ -247,7 +248,9 @@ public sealed class CodexQuotaReader
         {
             if (!process.HasExited)
             {
+                var pid = process.Id;
                 process.Kill(entireProcessTree: true);
+                DebugLogger.Log($"[CODEX-DIAG] codex app-server killed pid={pid}");
             }
         }
         catch
@@ -255,17 +258,7 @@ public sealed class CodexQuotaReader
         }
     }
 
-    private static void AppendLog(string message)
-    {
-        try
-        {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, Encoding.UTF8);
-        }
-        catch
-        {
-        }
-    }
+
 
     private static string Shorten(string text, int maxLength)
     {

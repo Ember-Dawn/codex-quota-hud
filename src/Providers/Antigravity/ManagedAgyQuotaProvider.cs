@@ -69,7 +69,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
         if (_port is null && !_process.IsRunning && IsEndpointDiscoveryBackedOff())
         {
-            AppendLog("agy endpoint discovery skipped by backoff");
+            DebugLogger.Log($"[AGY-DIAG] endpoint discovery skipped by backoff next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
             return FailureSnapshot(QuotaProviderStatus.Offline, EndpointNotReadyMessage);
         }
 
@@ -129,28 +129,30 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
             {
                 throw;
             }
-            catch
+            catch (Exception ex)
             {
+                DebugLogger.Log($"[AGY-DIAG] read from cached port failed port={_port.Value} error={Shorten(ex.Message, 180)}");
                 _port = null;
             }
         }
 
         if (IsEndpointDiscoveryBackedOff())
         {
-            AppendLog("agy endpoint discovery skipped by backoff");
+            DebugLogger.Log($"[AGY-DIAG] endpoint discovery skipped by backoff next={_nextEndpointDiscoveryAt:yyyy-MM-dd HH:mm:ss.fff}Z");
             throw new AgyEndpointNotReadyException();
         }
 
+        DebugLogger.Log($"[AGY-DIAG] endpoint discovery start agyPid={processId}");
         var discovered = await DiscoverReadyEndpointAsync(processId, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
         if (discovered is null)
         {
-            await HandleEndpointDiscoveryFailureAsync().ConfigureAwait(false);
+            await HandleEndpointDiscoveryFailureAsync(processId).ConfigureAwait(false);
             throw new AgyEndpointNotReadyException();
         }
 
         _port = discovered.Value.Port;
         ResetEndpointFailures();
-        AppendLog($"agy endpoint rediscovered port={_port}");
+        DebugLogger.Log($"[AGY-DIAG] endpoint ready agyPid={processId} port={_port}");
         return discovered.Value.Snapshot;
     }
 
@@ -222,7 +224,7 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         return DateTime.UtcNow < _nextEndpointDiscoveryAt;
     }
 
-    private async Task HandleEndpointDiscoveryFailureAsync()
+    private async Task HandleEndpointDiscoveryFailureAsync(int processId)
     {
         _endpointFailureCount++;
         _endpointNotReadyCount++;
@@ -233,12 +235,12 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
             _ => TimeSpan.FromSeconds(60)
         };
         _nextEndpointDiscoveryAt = DateTime.UtcNow + delay;
-        AppendLog($"agy endpoint discovery failed count={_endpointFailureCount}");
+        DebugLogger.Log($"[AGY-DIAG] endpoint discovery failed agyPid={processId} failureCount={_endpointFailureCount}");
 
         if (_endpointNotReadyCount >= 3)
         {
             _port = null;
-            AppendLog("agy endpoint not ready threshold reached; stopping managed process");
+            DebugLogger.Log("[AGY-DIAG] endpoint not ready threshold reached; stopping managed process");
             await _process.ShutdownIfOwnedAsync().ConfigureAwait(false);
         }
     }
@@ -327,17 +329,12 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         };
     }
 
-    private static void AppendLog(string message)
+    private static string Shorten(string text, int maxLength)
     {
-        try
-        {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, Encoding.UTF8);
-        }
-        catch
-        {
-        }
+        text = text.Trim().ReplaceLineEndings(" ");
+        return text.Length <= maxLength ? text : text[..maxLength] + "...";
     }
+
 
     private readonly record struct DiscoveredQuota(int Port, ProviderQuotaSnapshot Snapshot);
 

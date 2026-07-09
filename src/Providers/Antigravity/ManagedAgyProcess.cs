@@ -74,8 +74,23 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
 
         try
         {
+            DebugLogger.Log("[AGY-DIAG] ensure running");
+            DebugLogger.Log($"[AGY-DIAG] agy path={agyPath}");
+            DebugLogger.Log($"[AGY-DIAG] working dir={workingDirectory}");
+            DebugLogger.Log($"[AGY-DIAG] start hidden={_settings.StartAgyHidden}");
+            DebugLogger.Log($"[AGY-DIAG] CreateNoWindow={process.StartInfo.CreateNoWindow} WindowStyle={process.StartInfo.WindowStyle}");
+            ProcessDiagnostics.LogInterestingProcesses("before-agy-start");
+
             cancellationToken.ThrowIfCancellationRequested();
             process.Start();
+            DebugLogger.Log($"[AGY-DIAG] agy managed process started pid={process.Id}");
+            ProcessDiagnostics.LogInterestingProcesses("immediately-after-agy-start");
+            _ = Task.Run(() => ProcessDiagnostics.MonitorInterestingProcessesAsync(
+                reason: $"after-agy-start pid={process.Id}",
+                duration: TimeSpan.FromSeconds(30),
+                interval: TimeSpan.FromMilliseconds(500),
+                cancellationToken: CancellationToken.None));
+
             _process = process;
             _executablePath = agyPath;
             _workingDirectory = workingDirectory;
@@ -83,7 +98,6 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
             _wasStartedByHud = true;
             _stdoutDrainTask = DrainAsync(process.StandardOutput, cancellationToken);
             _stderrDrainTask = DrainAsync(process.StandardError, cancellationToken);
-            AppendLog($"agy managed process started pid={process.Id}");
             return AgyProcessStartResult.Running(process.Id, wasStartedNow: true);
         }
         catch (OperationCanceledException)
@@ -94,7 +108,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
         catch (Exception ex)
         {
             process.Dispose();
-            AppendLog($"agy start failed: {Shorten(ex.Message)}");
+            DebugLogger.Log($"[AGY-DIAG] agy start failed: {Shorten(ex.Message)}");
             return AgyProcessStartResult.Failed("AGY started, but quota endpoint is not ready. Please run agy once manually to finish login/trust.");
         }
     }
@@ -122,22 +136,22 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
             if (!process.HasExited && IsSameManagedProcess(process))
             {
                 var pid = process.Id;
-                AppendLog($"agy managed process stopping pid={pid}");
+                DebugLogger.Log($"[AGY-DIAG] stopping managed agy pid={pid}");
                 process.Kill(entireProcessTree: true);
                 try
                 {
                     await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-                    AppendLog($"agy managed process stopped pid={pid}");
+                    DebugLogger.Log($"[AGY-DIAG] stopped managed agy pid={pid}");
                 }
                 catch (TimeoutException)
                 {
-                    AppendLog($"agy managed process stop timeout pid={pid}");
+                    DebugLogger.Log($"[AGY-DIAG] stop timeout pid={pid}");
                 }
             }
         }
         catch (Exception ex)
         {
-            AppendLog($"agy stop failed: {Shorten(ex.Message)}");
+            DebugLogger.Log($"[AGY-DIAG] agy stop failed: {Shorten(ex.Message)}");
         }
     }
 
@@ -291,17 +305,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
         return null;
     }
 
-    private static void AppendLog(string message)
-    {
-        try
-        {
-            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
-            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, Encoding.UTF8);
-        }
-        catch
-        {
-        }
-    }
+
 
     private static string Shorten(string text)
     {
