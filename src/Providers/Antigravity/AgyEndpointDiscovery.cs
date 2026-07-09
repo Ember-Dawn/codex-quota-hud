@@ -35,20 +35,34 @@ public static class AgyEndpointDiscovery
             _ = await stderrTask;
             return ParseNetstatPorts(output, processId);
         }
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            TryKill(process);
+            return Array.Empty<int>();
+        }
         catch
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch
-            {
-            }
-
+            TryKill(process);
             return Array.Empty<int>();
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
         }
     }
 

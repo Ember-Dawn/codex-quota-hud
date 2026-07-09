@@ -17,6 +17,7 @@ public sealed class MainHudForm : Form
     private readonly FlowLayoutPanel _collapsedFlow = new BufferedFlowLayoutPanel();
     private readonly Dictionary<string, ProviderCardControl> _providerCards = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CollapsedProviderRowControl> _providerRows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _appCts = new();
 
     private AppSettings _settings;
     private Color _sevenDayColor;
@@ -32,6 +33,7 @@ public sealed class MainHudForm : Form
     private bool _isDragging;
     private bool _isRefreshing;
     private bool _isExiting;
+    private bool _pollerDisposed;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
@@ -68,12 +70,24 @@ public sealed class MainHudForm : Form
 
         BuildViews();
         WireMouseEvents(this);
-        ApplySettingsAsync(_settings, save: false).GetAwaiter().GetResult();
 
-        _refreshTimer.Tick += async (_, _) => await RefreshQuotaAsync();
+        _refreshTimer.Interval = Math.Max(1, _settings.AutoRefreshSeconds) * 1000;
+        _refreshTimer.Tick += async (_, __) =>
+        {
+            if (_isExiting)
+            {
+                return;
+            }
+
+            await RefreshQuotaAsync();
+        };
         _refreshTimer.Start();
 
-        Load += async (_, _) => await RefreshQuotaAsync();
+        Load += async (_, _) =>
+        {
+            await ApplySettingsAsync(_settings, save: false);
+            await RefreshQuotaAsync();
+        };
         FormClosing += MainHudForm_FormClosing;
     }
 
@@ -98,19 +112,13 @@ public sealed class MainHudForm : Form
     {
         if (disposing)
         {
+            _refreshTimer.Stop();
             _refreshTimer.Dispose();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _menu.Dispose();
-            _toast?.Close();
-            _toast?.Dispose();
-            try
-            {
-                _poller.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            }
-            catch
-            {
-            }
+            CloseToast();
+            _appCts.Dispose();
         }
 
         base.Dispose(disposing);
@@ -121,7 +129,7 @@ public sealed class MainHudForm : Form
         _menu.Items.Add("Refresh Now", null, async (_, _) => await RefreshQuotaAsync());
         _menu.Items.Add("Settings...", null, (_, _) => ShowSettingsWindow());
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add("Exit", null, (_, _) => ExitApplication());
+        _menu.Items.Add("Exit", null, async (_, _) => await ExitApplicationAsync());
     }
 
     private void BuildViews()
@@ -153,7 +161,7 @@ public sealed class MainHudForm : Form
 
     private async Task RefreshQuotaAsync()
     {
-        if (_isRefreshing)
+        if (_isRefreshing || _isExiting || _appCts.IsCancellationRequested)
         {
             return;
         }
@@ -166,7 +174,12 @@ public sealed class MainHudForm : Form
 
         try
         {
-            var snapshots = await _poller.RefreshAsync();
+            var snapshots = await _poller.RefreshAsync(_appCts.Token);
+            if (_isExiting || IsDisposed || Disposing || _appCts.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (snapshots.Count > 0)
             {
                 _providerSnapshots = snapshots.ToList();
@@ -174,6 +187,10 @@ public sealed class MainHudForm : Form
 
             UpdateUi(forceLayout: false);
             ShowAgyToastIfNeeded();
+        }
+        catch (OperationCanceledException) when (_isExiting || _appCts.IsCancellationRequested)
+        {
+            AppendLog("refresh cancelled by exit");
         }
         finally
         {
@@ -183,6 +200,11 @@ public sealed class MainHudForm : Form
 
     private void UpdateUi(bool forceLayout)
     {
+        if (_isExiting || IsDisposed || Disposing)
+        {
+            return;
+        }
+
         var layoutChanged = SynchronizeProviderControls();
         if (layoutChanged || forceLayout)
         {
@@ -272,6 +294,11 @@ public sealed class MainHudForm : Form
 
     private async Task ApplySettingsAsync(AppSettings settings, bool save)
     {
+        if (_isExiting || _appCts.IsCancellationRequested)
+        {
+            return;
+        }
+
         _settings = settings.Clone();
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
@@ -285,7 +312,7 @@ public sealed class MainHudForm : Form
         {
             _providerSnapshots = _providerSnapshots.Where(snapshot => snapshot.ProviderId != "agy").ToList();
             _lastAgyToastKey = null;
-            _toast?.Close();
+            CloseToast();
         }
 
         if (save)
@@ -298,6 +325,11 @@ public sealed class MainHudForm : Form
 
     private async void ShowSettingsWindow()
     {
+        if (_isExiting)
+        {
+            return;
+        }
+
         using var settingsForm = new SettingsForm(_settings);
         settingsForm.Location = CalculateSettingsLocation(settingsForm.Size);
         if (settingsForm.ShowDialog(this) == DialogResult.OK)
@@ -387,7 +419,7 @@ public sealed class MainHudForm : Form
 
     private void ShowAgyToastIfNeeded()
     {
-        if (!_settings.EnableAntigravity)
+        if (_isExiting || IsDisposed || Disposing || !_settings.EnableAntigravity)
         {
             return;
         }
@@ -407,8 +439,7 @@ public sealed class MainHudForm : Form
 
         _lastAgyToastKey = message;
         _lastAgyToastAt = now;
-        _toast?.Close();
-        _toast?.Dispose();
+        CloseToast();
         _toast = new HudToastForm(message);
         _toast.ShowNear(this);
     }
@@ -467,11 +498,77 @@ public sealed class MainHudForm : Form
         }
     }
 
-    private void ExitApplication()
+    private async Task ExitApplicationAsync()
     {
+        if (_isExiting)
+        {
+            return;
+        }
+
+        AppendLog("exit requested");
         _isExiting = true;
-        _notifyIcon.Visible = false;
-        Application.Exit();
+        _refreshTimer.Stop();
+        _appCts.Cancel();
+        _menu.Enabled = false;
+        CloseToast();
+
+        try
+        {
+            await DisposePollerAsync().WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        catch (TimeoutException)
+        {
+            AppendLog("poller dispose timeout during exit");
+        }
+        catch (OperationCanceledException)
+        {
+            AppendLog("poller dispose cancelled during exit");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"poller dispose failed during exit: {Shorten(ex.Message)}");
+        }
+        finally
+        {
+            _notifyIcon.Visible = false;
+            if (!IsDisposed && IsHandleCreated)
+            {
+                BeginInvoke(new Action(Close));
+            }
+            else
+            {
+                Close();
+            }
+        }
+    }
+
+    private async Task DisposePollerAsync()
+    {
+        if (_pollerDisposed)
+        {
+            return;
+        }
+
+        _pollerDisposed = true;
+        AppendLog("poller dispose started");
+        await _poller.DisposeAsync();
+        AppendLog("poller dispose completed");
+    }
+
+    private void CloseToast()
+    {
+        try
+        {
+            _toast?.Close();
+            _toast?.Dispose();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _toast = null;
+        }
     }
 
     private void MainHudForm_FormClosing(object? sender, FormClosingEventArgs e)
@@ -628,6 +725,24 @@ public sealed class MainHudForm : Form
         path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
         path.CloseFigure();
         return path;
+    }
+
+    private static void AppendLog(string message)
+    {
+        try
+        {
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, System.Text.Encoding.UTF8);
+        }
+        catch
+        {
+        }
+    }
+
+    private static string Shorten(string text)
+    {
+        text = text.Trim().ReplaceLineEndings(" ");
+        return text.Length <= 180 ? text : text[..180] + "...";
     }
 
     private sealed class BufferedFlowLayoutPanel : FlowLayoutPanel

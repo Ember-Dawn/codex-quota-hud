@@ -13,15 +13,28 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
     private readonly AntigravityQuotaParser _parser = new();
     private readonly ManagedAgyProcess _process;
+    private readonly HttpClient _httpClient;
     private IReadOnlyList<QuotaBucketSnapshot> _lastBuckets = Array.Empty<QuotaBucketSnapshot>();
     private DateTime? _changedAt;
     private AppSettings _settings;
     private int? _port;
+    private DateTime _nextEndpointDiscoveryAt = DateTime.MinValue;
+    private int _endpointFailureCount;
+    private int _endpointNotReadyCount;
+    private bool _disposed;
 
     public ManagedAgyQuotaProvider(AppSettings settings)
     {
         _settings = settings.Clone();
         _process = new ManagedAgyProcess(_settings);
+        var handler = new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) => IsLocalAgyEndpoint(request?.RequestUri, certificate)
+        };
+        _httpClient = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
     }
 
     public string ProviderId => "agy";
@@ -30,18 +43,37 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
     public void ApplySettings(AppSettings settings)
     {
+        var wasEnabled = _settings.EnableAntigravity;
+        var pathChanged = !string.Equals(_settings.AgyExecutablePath, settings.AgyExecutablePath, StringComparison.OrdinalIgnoreCase);
         _settings = settings.Clone();
         _process.ApplySettings(_settings);
+
+        if ((!wasEnabled && _settings.EnableAntigravity) || pathChanged || !_settings.EnableAntigravity)
+        {
+            ResetEndpointState();
+        }
     }
 
     public async Task<ProviderQuotaSnapshot> RefreshAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_disposed)
+        {
+            return ProviderQuotaSnapshot.Disabled(ProviderId, DisplayName, "Gemini");
+        }
+
         if (!_settings.EnableAntigravity)
         {
             return ProviderQuotaSnapshot.Disabled(ProviderId, DisplayName, "Gemini");
         }
 
-        var startResult = await _process.EnsureRunningAsync(cancellationToken);
+        if (_port is null && !_process.IsRunning && IsEndpointDiscoveryBackedOff())
+        {
+            AppendLog("agy endpoint discovery skipped by backoff");
+            return FailureSnapshot(QuotaProviderStatus.Offline, EndpointNotReadyMessage);
+        }
+
+        var startResult = await _process.EnsureRunningAsync(cancellationToken).ConfigureAwait(false);
         if (!startResult.Success || startResult.ProcessId is null)
         {
             return FailureSnapshot(QuotaProviderStatus.Offline, startResult.ErrorMessage ?? RequestFailedMessage);
@@ -49,13 +81,17 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
         try
         {
-            var snapshot = await ReadWithRetryAsync(startResult.ProcessId.Value, cancellationToken);
+            var snapshot = await ReadWithRetryAsync(startResult.ProcessId.Value, cancellationToken).ConfigureAwait(false);
             snapshot.IsManagedProcess = true;
             snapshot.ProcessId = _process.ProcessId;
             snapshot.Port = _port;
             UpdateChangedAt(snapshot.Buckets);
             snapshot.ChangedAt = _changedAt;
             return snapshot;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (AgyEndpointNotReadyException)
         {
@@ -69,7 +105,14 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
     public async ValueTask DisposeAsync()
     {
-        await _process.DisposeAsync();
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _httpClient.Dispose();
+        await _process.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task<ProviderQuotaSnapshot> ReadWithRetryAsync(int processId, CancellationToken cancellationToken)
@@ -78,7 +121,13 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         {
             try
             {
-                return await ReadFromPortAsync(_port.Value, timeout: TimeSpan.FromSeconds(8), cancellationToken);
+                var snapshot = await ReadFromPortAsync(_port.Value, timeout: TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false);
+                ResetEndpointFailures();
+                return snapshot;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch
             {
@@ -86,13 +135,22 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
             }
         }
 
-        var discovered = await DiscoverReadyEndpointAsync(processId, TimeSpan.FromSeconds(15), cancellationToken);
+        if (IsEndpointDiscoveryBackedOff())
+        {
+            AppendLog("agy endpoint discovery skipped by backoff");
+            throw new AgyEndpointNotReadyException();
+        }
+
+        var discovered = await DiscoverReadyEndpointAsync(processId, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
         if (discovered is null)
         {
+            await HandleEndpointDiscoveryFailureAsync().ConfigureAwait(false);
             throw new AgyEndpointNotReadyException();
         }
 
         _port = discovered.Value.Port;
+        ResetEndpointFailures();
+        AppendLog($"agy endpoint rediscovered port={_port}");
         return discovered.Value.Snapshot;
     }
 
@@ -101,11 +159,13 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
         var deadline = DateTime.UtcNow + maxWait;
         var probedPorts = new HashSet<int>();
 
-        while (DateTime.UtcNow < deadline && !cancellationToken.IsCancellationRequested)
+        while (DateTime.UtcNow < deadline)
         {
-            var ports = await AgyEndpointDiscovery.FindListenPortsAsync(processId, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            var ports = await AgyEndpointDiscovery.FindListenPortsAsync(processId, cancellationToken).ConfigureAwait(false);
             foreach (var port in ports)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!probedPorts.Add(port) && DateTime.UtcNow + TimeSpan.FromSeconds(1) < deadline)
                 {
                     continue;
@@ -113,15 +173,19 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
 
                 try
                 {
-                    var snapshot = await ReadFromPortAsync(port, timeout: TimeSpan.FromSeconds(2), cancellationToken);
+                    var snapshot = await ReadFromPortAsync(port, timeout: TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
                     return new DiscoveredQuota(port, snapshot);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch
                 {
                 }
             }
 
-            await Task.Delay(500, cancellationToken);
+            await Task.Delay(500, cancellationToken).ConfigureAwait(false);
         }
 
         return null;
@@ -130,23 +194,66 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
     private async Task<ProviderQuotaSnapshot> ReadFromPortAsync(int port, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var uri = new Uri($"https://127.0.0.1:{port}{EndpointPath}");
-        using var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) => IsLocalAgyEndpoint(request?.RequestUri, certificate)
-        };
-        using var client = new HttpClient(handler) { Timeout = timeout };
+        using var timeoutCts = new CancellationTokenSource(timeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
         using var request = new HttpRequestMessage(HttpMethod.Post, uri)
         {
             Content = new StringContent(RequestBody, Encoding.UTF8, "application/json")
         };
         request.Headers.TryAddWithoutValidation("Connect-Protocol-Version", "1");
 
-        using var response = await client.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
-        var snapshot = _parser.Parse(json);
-        snapshot.Port = port;
-        return snapshot;
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, linkedCts.Token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(linkedCts.Token).ConfigureAwait(false);
+            var snapshot = _parser.Parse(json);
+            snapshot.Port = port;
+            return snapshot;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeoutCts.IsCancellationRequested)
+        {
+            throw new TimeoutException("AGY quota request timeout");
+        }
+    }
+
+    private bool IsEndpointDiscoveryBackedOff()
+    {
+        return DateTime.UtcNow < _nextEndpointDiscoveryAt;
+    }
+
+    private async Task HandleEndpointDiscoveryFailureAsync()
+    {
+        _endpointFailureCount++;
+        _endpointNotReadyCount++;
+        var delay = _endpointFailureCount switch
+        {
+            1 => TimeSpan.FromSeconds(15),
+            2 => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromSeconds(60)
+        };
+        _nextEndpointDiscoveryAt = DateTime.UtcNow + delay;
+        AppendLog($"agy endpoint discovery failed count={_endpointFailureCount}");
+
+        if (_endpointNotReadyCount >= 3)
+        {
+            _port = null;
+            AppendLog("agy endpoint not ready threshold reached; stopping managed process");
+            await _process.ShutdownIfOwnedAsync().ConfigureAwait(false);
+        }
+    }
+
+    private void ResetEndpointFailures()
+    {
+        _endpointFailureCount = 0;
+        _endpointNotReadyCount = 0;
+        _nextEndpointDiscoveryAt = DateTime.MinValue;
+    }
+
+    private void ResetEndpointState()
+    {
+        _port = null;
+        ResetEndpointFailures();
     }
 
     private static bool IsLocalAgyEndpoint(Uri? requestUri, X509Certificate2? certificate)
@@ -218,6 +325,18 @@ public sealed class ManagedAgyQuotaProvider : IQuotaProvider
             new() { Id = "gemini-weekly", Label = "7d", ShortLabel = "7d" },
             new() { Id = "gemini-5h", Label = "5h", ShortLabel = "5h" }
         };
+    }
+
+    private static void AppendLog(string message)
+    {
+        try
+        {
+            var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(Environment.CurrentDirectory, "debug.log"), line, Encoding.UTF8);
+        }
+        catch
+        {
+        }
     }
 
     private readonly record struct DiscoveredQuota(int Port, ProviderQuotaSnapshot Snapshot);

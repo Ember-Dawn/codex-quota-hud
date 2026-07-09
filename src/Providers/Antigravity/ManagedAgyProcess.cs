@@ -13,6 +13,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
     private string? _executablePath;
     private string? _workingDirectory;
     private DateTime? _startTime;
+    private bool _wasStartedByHud;
     private AppSettings _settings;
 
     public ManagedAgyProcess(AppSettings settings)
@@ -21,10 +22,11 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
     }
 
     public int? ProcessId => _process is { HasExited: false } ? _process.Id : null;
+    public bool IsRunning => _process is { HasExited: false };
     public DateTime? StartTime => _startTime;
     public string? ExecutablePath => _executablePath;
     public string? WorkingDirectory => _workingDirectory;
-    public bool WasStartedByHud => _process is not null;
+    public bool WasStartedByHud => _wasStartedByHud;
 
     public void ApplySettings(AppSettings settings)
     {
@@ -33,6 +35,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
 
     public async Task<AgyProcessStartResult> EnsureRunningAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_process is { HasExited: false })
         {
             return AgyProcessStartResult.Running(_process.Id, wasStartedNow: false);
@@ -40,6 +43,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
 
         await DisposeExistingProcessObjectAsync();
 
+        cancellationToken.ThrowIfCancellationRequested();
         var agyPath = ResolveAgyPath(_settings.AgyExecutablePath);
         if (agyPath is null)
         {
@@ -70,15 +74,22 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             process.Start();
             _process = process;
             _executablePath = agyPath;
             _workingDirectory = workingDirectory;
             _startTime = SafeReadStartTime(process);
+            _wasStartedByHud = true;
             _stdoutDrainTask = DrainAsync(process.StandardOutput, cancellationToken);
             _stderrDrainTask = DrainAsync(process.StandardError, cancellationToken);
             AppendLog($"agy managed process started pid={process.Id}");
             return AgyProcessStartResult.Running(process.Id, wasStartedNow: true);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Dispose();
+            throw;
         }
         catch (Exception ex)
         {
@@ -90,8 +101,12 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await ShutdownIfOwnedAsync();
-        await DisposeExistingProcessObjectAsync();
+        if (_settings.CloseManagedAgyOnExit)
+        {
+            await ShutdownIfOwnedAsync().ConfigureAwait(false);
+        }
+
+        await DisposeExistingProcessObjectAsync().ConfigureAwait(false);
     }
 
     public async Task ShutdownIfOwnedAsync()
@@ -106,9 +121,18 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
         {
             if (!process.HasExited && IsSameManagedProcess(process))
             {
-                AppendLog($"agy managed process stopping pid={process.Id}");
+                var pid = process.Id;
+                AppendLog($"agy managed process stopping pid={pid}");
                 process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+                    AppendLog($"agy managed process stopped pid={pid}");
+                }
+                catch (TimeoutException)
+                {
+                    AppendLog($"agy managed process stop timeout pid={pid}");
+                }
             }
         }
         catch (Exception ex)
@@ -147,6 +171,7 @@ public sealed class ManagedAgyProcess : IAsyncDisposable
         _stdoutDrainTask = null;
         _stderrDrainTask = null;
         process?.Dispose();
+        _wasStartedByHud = false;
     }
 
     private bool IsSameManagedProcess(Process process)

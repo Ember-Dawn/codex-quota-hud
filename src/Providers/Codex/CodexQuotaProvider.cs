@@ -36,6 +36,10 @@ public sealed class CodexQuotaProvider : IQuotaProvider
                 ErrorMessage = quota.ErrorMessage
             };
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             return new ProviderQuotaSnapshot
