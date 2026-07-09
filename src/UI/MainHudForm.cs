@@ -1,5 +1,4 @@
 using System.Drawing.Drawing2D;
-using System.Globalization;
 
 namespace CodexQuotaHud;
 
@@ -7,41 +6,32 @@ public sealed class MainHudForm : Form
 {
     private static readonly Color WindowBackColor = ColorTranslator.FromHtml("#181C22");
     private static readonly Color WindowBorderColor = ColorTranslator.FromHtml("#2E3640");
-    private static readonly Color TextColor = ColorTranslator.FromHtml("#F2F4F8");
-    private static readonly Color MutedTextColor = ColorTranslator.FromHtml("#C8D0DA");
 
-    private readonly CodexQuotaReader _reader = new();
+    private readonly QuotaPoller _poller = new();
     private readonly System.Windows.Forms.Timer _refreshTimer = new();
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu = new();
-
     private readonly Panel _detailView = new();
     private readonly Panel _collapsedDockView = new();
-    private readonly Label _titleLabel = new();
-    private readonly Label _statusLabel = new();
-    private readonly Label _updatedLabel = new();
-    private readonly Label _sevenDayLabel = new();
-    private readonly Label _fiveHourLabel = new();
-    private readonly QuotaBarControl _detailSevenDayBar = new();
-    private readonly QuotaBarControl _detailFiveHourBar = new();
-    private readonly Label _sevenDayResetPrefixLabel = new();
-    private readonly Label _sevenDayResetDateLabel = new();
-    private readonly Label _sevenDayResetTimeLabel = new();
-    private readonly Label _fiveHourResetPrefixLabel = new();
-    private readonly Label _fiveHourResetTimeLabel = new();
-    private readonly QuotaBarControl _collapsedSevenDayBar = new();
-    private readonly QuotaBarControl _collapsedFiveHourBar = new();
+    private readonly FlowLayoutPanel _detailFlow = new BufferedFlowLayoutPanel();
+    private readonly FlowLayoutPanel _collapsedFlow = new BufferedFlowLayoutPanel();
+    private readonly Dictionary<string, ProviderCardControl> _providerCards = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CollapsedProviderRowControl> _providerRows = new(StringComparer.OrdinalIgnoreCase);
 
     private AppSettings _settings;
     private Color _sevenDayColor;
     private Color _fiveHourColor;
     private Color _trackColor;
     private Color _trackBorderColor;
-    private QuotaSnapshot _snapshot = new();
+    private List<ProviderQuotaSnapshot> _providerSnapshots = new();
+    private HudToastForm? _toast;
+    private string? _lastAgyToastKey;
+    private DateTime _lastAgyToastAt = DateTime.MinValue;
     private bool _isDocked;
     private bool _isExpanded = true;
     private bool _isDragging;
     private bool _isRefreshing;
+    private bool _isExiting;
     private Point _dragStartCursor;
     private Point _dragStartLocation;
 
@@ -52,17 +42,17 @@ public sealed class MainHudForm : Form
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
         _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
         _trackBorderColor = ColorTranslator.FromHtml(_settings.TrackBorderColor);
+        _providerSnapshots = CreateInitialSnapshots();
 
         Text = "Codex Quota HUD";
         FormBorderStyle = FormBorderStyle.None;
         TopMost = true;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(370, 104);
+        Size = new Size(370, 116);
         MinimumSize = new Size(290, 30);
         Padding = new Padding(1);
         BackColor = WindowBackColor;
-        ForeColor = TextColor;
         DoubleBuffered = true;
 
         BuildMenu();
@@ -78,7 +68,7 @@ public sealed class MainHudForm : Form
 
         BuildViews();
         WireMouseEvents(this);
-        ApplySettings(_settings, save: false);
+        ApplySettingsAsync(_settings, save: false).GetAwaiter().GetResult();
 
         _refreshTimer.Tick += async (_, _) => await RefreshQuotaAsync();
         _refreshTimer.Start();
@@ -112,6 +102,15 @@ public sealed class MainHudForm : Form
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             _menu.Dispose();
+            _toast?.Close();
+            _toast?.Dispose();
+            try
+            {
+                _poller.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
         }
 
         base.Dispose(disposing);
@@ -127,113 +126,29 @@ public sealed class MainHudForm : Form
 
     private void BuildViews()
     {
-        BuildDetailView();
-        BuildCollapsedDockView();
-
-        Controls.Add(_detailView);
-        Controls.Add(_collapsedDockView);
-        UpdateUi(string.Empty);
-    }
-
-    private void BuildDetailView()
-    {
         _detailView.Dock = DockStyle.Fill;
         _detailView.BackColor = WindowBackColor;
-
-        _titleLabel.AutoSize = false;
-        _titleLabel.Font = new Font(Font.FontFamily, 10.5f, FontStyle.Bold);
-        _titleLabel.ForeColor = TextColor;
-        _titleLabel.Text = "Codex Quota";
-        _titleLabel.Location = new Point(14, 9);
-        _titleLabel.Size = new Size(180, 20);
-
-        ConfigureMetaLabel(_statusLabel, new Point(196, 9), new Size(102, 20));
-        _statusLabel.ForeColor = MutedTextColor;
-        _statusLabel.TextAlign = ContentAlignment.MiddleRight;
-
-        ConfigureMetaLabel(_updatedLabel, new Point(306, 9), new Size(50, 20));
-        _updatedLabel.ForeColor = MutedTextColor;
-        _updatedLabel.TextAlign = ContentAlignment.MiddleRight;
-
-        ConfigureMetaLabel(_sevenDayLabel, new Point(14, 39), new Size(34, 23));
-        _sevenDayLabel.Text = "7d";
-        ConfigureMetaLabel(_fiveHourLabel, new Point(14, 68), new Size(34, 23));
-        _fiveHourLabel.Text = "5h";
-
-        ConfigureBar(_detailSevenDayBar, string.Empty, _sevenDayColor, showTitle: false, showPercentText: true);
-        _detailSevenDayBar.Location = new Point(50, 38);
-        _detailSevenDayBar.Size = new Size(168, 23);
-
-        ConfigureBar(_detailFiveHourBar, string.Empty, _fiveHourColor, showTitle: false, showPercentText: true);
-        _detailFiveHourBar.Location = new Point(50, 67);
-        _detailFiveHourBar.Size = new Size(168, 23);
-
-        ConfigureMetaLabel(_sevenDayResetPrefixLabel, new Point(230, 38), new Size(14, 23));
-        _sevenDayResetPrefixLabel.Text = "R";
-        ConfigureMetaLabel(_sevenDayResetDateLabel, new Point(248, 38), new Size(54, 23));
-        ConfigureMetaLabel(_sevenDayResetTimeLabel, new Point(306, 38), new Size(50, 23));
-        _sevenDayResetTimeLabel.TextAlign = ContentAlignment.MiddleRight;
-
-        ConfigureMetaLabel(_fiveHourResetPrefixLabel, new Point(230, 67), new Size(14, 23));
-        _fiveHourResetPrefixLabel.Text = "R";
-        ConfigureMetaLabel(_fiveHourResetTimeLabel, new Point(306, 67), new Size(50, 23));
-        _fiveHourResetTimeLabel.TextAlign = ContentAlignment.MiddleRight;
-
-        _detailView.Controls.AddRange(new Control[]
-        {
-            _titleLabel,
-            _statusLabel,
-            _updatedLabel,
-            _sevenDayLabel,
-            _fiveHourLabel,
-            _detailSevenDayBar,
-            _detailFiveHourBar,
-            _sevenDayResetPrefixLabel,
-            _sevenDayResetDateLabel,
-            _sevenDayResetTimeLabel,
-            _fiveHourResetPrefixLabel,
-            _fiveHourResetTimeLabel
-        });
-    }
-
-    private void BuildCollapsedDockView()
-    {
         _collapsedDockView.Dock = DockStyle.Fill;
         _collapsedDockView.BackColor = WindowBackColor;
         _collapsedDockView.Visible = false;
 
-        ConfigureBar(_collapsedSevenDayBar, "7d", _sevenDayColor, showTitle: true, showPercentText: false);
-        _collapsedSevenDayBar.Location = new Point(10, 5);
-        _collapsedSevenDayBar.Size = new Size(140, 22);
+        _detailFlow.Dock = DockStyle.Fill;
+        _detailFlow.FlowDirection = FlowDirection.TopDown;
+        _detailFlow.WrapContents = false;
+        _detailFlow.Padding = new Padding(10, 10, 10, 2);
+        _detailFlow.BackColor = WindowBackColor;
 
-        ConfigureBar(_collapsedFiveHourBar, "5h", _fiveHourColor, showTitle: true, showPercentText: false);
-        _collapsedFiveHourBar.Location = new Point(170, 5);
-        _collapsedFiveHourBar.Size = new Size(140, 22);
+        _collapsedFlow.Dock = DockStyle.Fill;
+        _collapsedFlow.FlowDirection = FlowDirection.TopDown;
+        _collapsedFlow.WrapContents = false;
+        _collapsedFlow.Padding = new Padding(0, 2, 0, 2);
+        _collapsedFlow.BackColor = WindowBackColor;
 
-        _collapsedDockView.Controls.AddRange(new Control[] { _collapsedSevenDayBar, _collapsedFiveHourBar });
-    }
-
-    private void ConfigureBar(QuotaBarControl bar, string title, Color fillColor, bool showTitle, bool showPercentText)
-    {
-        bar.Title = title;
-        bar.FillColor = fillColor;
-        bar.TrackColor = _trackColor;
-        bar.TrackBorderColor = _trackBorderColor;
-        bar.TrackBorderWidth = 2f;
-        bar.TextColor = TextColor;
-        bar.BackColor = WindowBackColor;
-        bar.ShowTitle = showTitle;
-        bar.ShowPercentText = showPercentText;
-    }
-
-    private static void ConfigureMetaLabel(Label label, Point location, Size size)
-    {
-        label.AutoSize = false;
-        label.Font = new Font(FontFamily.GenericSansSerif, 8.8f, FontStyle.Bold);
-        label.ForeColor = TextColor;
-        label.TextAlign = ContentAlignment.MiddleLeft;
-        label.Location = location;
-        label.Size = size;
+        _detailView.Controls.Add(_detailFlow);
+        _collapsedDockView.Controls.Add(_collapsedFlow);
+        Controls.Add(_detailView);
+        Controls.Add(_collapsedDockView);
+        UpdateUi(forceLayout: true);
     }
 
     private async Task RefreshQuotaAsync()
@@ -244,17 +159,21 @@ public sealed class MainHudForm : Form
         }
 
         _isRefreshing = true;
-        UpdateUi("Refreshing...");
+        if (EnsureEnabledProviderPlaceholders())
+        {
+            UpdateUi(forceLayout: true);
+        }
 
         try
         {
-            _snapshot = await _reader.ReadAsync();
-            UpdateUi("Updated");
-        }
-        catch (Exception ex)
-        {
-            _snapshot = new QuotaParser().FromError(ex.Message);
-            UpdateUi("Failed");
+            var snapshots = await _poller.RefreshAsync();
+            if (snapshots.Count > 0)
+            {
+                _providerSnapshots = snapshots.ToList();
+            }
+
+            UpdateUi(forceLayout: false);
+            ShowAgyToastIfNeeded();
         }
         finally
         {
@@ -262,65 +181,133 @@ public sealed class MainHudForm : Form
         }
     }
 
-    private void UpdateUi(string? statusText = null)
+    private void UpdateUi(bool forceLayout)
     {
-        _detailSevenDayBar.Percent = _snapshot.SevenDay.RemainingPercent;
-        _detailFiveHourBar.Percent = _snapshot.FiveHour.RemainingPercent;
-        _collapsedSevenDayBar.Percent = _snapshot.SevenDay.RemainingPercent;
-        _collapsedFiveHourBar.Percent = _snapshot.FiveHour.RemainingPercent;
-
-        _statusLabel.Text = statusText ?? string.Empty;
-        _updatedLabel.Text = _snapshot.UpdatedAt.ToString("HH:mm", CultureInfo.InvariantCulture);
-        _sevenDayResetDateLabel.Text = FormatSevenDayResetDate(_snapshot.SevenDay.ResetAt);
-        _sevenDayResetTimeLabel.Text = FormatResetTime(_snapshot.SevenDay.ResetAt);
-        _fiveHourResetTimeLabel.Text = FormatResetTime(_snapshot.FiveHour.ResetAt);
+        var layoutChanged = SynchronizeProviderControls();
+        if (layoutChanged || forceLayout)
+        {
+            ShowCurrentView(force: forceLayout);
+        }
     }
 
-    private static string FormatSevenDayResetDate(DateTime? resetAt)
+    private bool SynchronizeProviderControls()
     {
-        return resetAt.HasValue ? resetAt.Value.ToString("MMM dd", CultureInfo.InvariantCulture) : "--";
+        var layoutChanged = false;
+        var providerIds = _providerSnapshots.Select(snapshot => snapshot.ProviderId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _detailFlow.SuspendLayout();
+        _collapsedFlow.SuspendLayout();
+        try
+        {
+            foreach (var providerId in _providerCards.Keys.Where(id => !providerIds.Contains(id)).ToArray())
+            {
+                RemoveProviderControl(providerId);
+                layoutChanged = true;
+            }
+
+            for (var index = 0; index < _providerSnapshots.Count; index++)
+            {
+                var snapshot = _providerSnapshots[index];
+                if (!_providerCards.TryGetValue(snapshot.ProviderId, out var card))
+                {
+                    card = new ProviderCardControl();
+                    card.SetColors(_sevenDayColor, _fiveHourColor, _trackColor, _trackBorderColor);
+                    WireMouseEvents(card);
+                    _providerCards[snapshot.ProviderId] = card;
+                    _detailFlow.Controls.Add(card);
+                    layoutChanged = true;
+                }
+
+                if (!_providerRows.TryGetValue(snapshot.ProviderId, out var row))
+                {
+                    row = new CollapsedProviderRowControl();
+                    row.SetColors(_sevenDayColor, _fiveHourColor, _trackColor, _trackBorderColor);
+                    WireMouseEvents(row);
+                    _providerRows[snapshot.ProviderId] = row;
+                    _collapsedFlow.Controls.Add(row);
+                    layoutChanged = true;
+                }
+
+                card.SetColors(_sevenDayColor, _fiveHourColor, _trackColor, _trackBorderColor);
+                row.SetColors(_sevenDayColor, _fiveHourColor, _trackColor, _trackBorderColor);
+                layoutChanged |= card.UpdateSnapshot(snapshot);
+                row.UpdateSnapshot(snapshot);
+
+                if (_detailFlow.Controls.GetChildIndex(card) != index)
+                {
+                    _detailFlow.Controls.SetChildIndex(card, index);
+                    layoutChanged = true;
+                }
+
+                if (_collapsedFlow.Controls.GetChildIndex(row) != index)
+                {
+                    _collapsedFlow.Controls.SetChildIndex(row, index);
+                    layoutChanged = true;
+                }
+            }
+        }
+        finally
+        {
+            _collapsedFlow.ResumeLayout();
+            _detailFlow.ResumeLayout();
+        }
+
+        return layoutChanged;
     }
 
-    private static string FormatResetTime(DateTime? resetAt)
+    private void RemoveProviderControl(string providerId)
     {
-        return resetAt.HasValue ? resetAt.Value.ToString("HH:mm", CultureInfo.InvariantCulture) : "--";
+        if (_providerCards.Remove(providerId, out var card))
+        {
+            _detailFlow.Controls.Remove(card);
+            card.Dispose();
+        }
+
+        if (_providerRows.Remove(providerId, out var row))
+        {
+            _collapsedFlow.Controls.Remove(row);
+            row.Dispose();
+        }
     }
 
-    private void ApplySettings(AppSettings settings, bool save)
+    private async Task ApplySettingsAsync(AppSettings settings, bool save)
     {
         _settings = settings.Clone();
         _sevenDayColor = ColorTranslator.FromHtml(_settings.SevenDayColor);
         _fiveHourColor = ColorTranslator.FromHtml(_settings.FiveHourColor);
         _trackColor = ColorTranslator.FromHtml(_settings.TrackColor);
         _trackBorderColor = ColorTranslator.FromHtml(_settings.TrackBorderColor);
-
         _refreshTimer.Interval = Math.Max(1, _settings.AutoRefreshSeconds) * 1000;
-        _detailSevenDayBar.FillColor = _sevenDayColor;
-        _collapsedSevenDayBar.FillColor = _sevenDayColor;
-        _detailFiveHourBar.FillColor = _fiveHourColor;
-        _collapsedFiveHourBar.FillColor = _fiveHourColor;
-        _detailSevenDayBar.TrackColor = _trackColor;
-        _collapsedSevenDayBar.TrackColor = _trackColor;
-        _detailFiveHourBar.TrackColor = _trackColor;
-        _collapsedFiveHourBar.TrackColor = _trackColor;
-        _detailSevenDayBar.TrackBorderColor = _trackBorderColor;
-        _collapsedSevenDayBar.TrackBorderColor = _trackBorderColor;
-        _detailFiveHourBar.TrackBorderColor = _trackBorderColor;
-        _collapsedFiveHourBar.TrackBorderColor = _trackBorderColor;
+
+        await _poller.ApplySettingsAsync(_settings);
+
+        if (!_settings.EnableAntigravity)
+        {
+            _providerSnapshots = _providerSnapshots.Where(snapshot => snapshot.ProviderId != "agy").ToList();
+            _lastAgyToastKey = null;
+            _toast?.Close();
+        }
 
         if (save)
         {
             SettingsStore.Save(_settings);
         }
+
+        UpdateUi(forceLayout: true);
     }
 
-    private void ShowSettingsWindow()
+    private async void ShowSettingsWindow()
     {
         using var settingsForm = new SettingsForm(_settings);
         settingsForm.Location = CalculateSettingsLocation(settingsForm.Size);
         if (settingsForm.ShowDialog(this) == DialogResult.OK)
         {
-            ApplySettings(settingsForm.ResultSettings, save: true);
+            var enableChanged = settingsForm.ResultSettings.EnableAntigravity != _settings.EnableAntigravity;
+            await ApplySettingsAsync(settingsForm.ResultSettings, save: true);
+            if (enableChanged)
+            {
+                await RefreshQuotaAsync();
+            }
         }
     }
 
@@ -344,14 +331,130 @@ public sealed class MainHudForm : Form
         return preferred;
     }
 
-    private void ShowCurrentView()
+    private void ShowCurrentView(bool force = false)
     {
         var showDetail = !_isDocked || _isExpanded;
-        Size = showDetail ? new Size(370, 104) : new Size(320, 32);
-        _detailView.Visible = showDetail;
-        _collapsedDockView.Visible = !showDetail;
-        ApplyRoundedRegion();
-        Invalidate();
+        var desiredSize = showDetail ? new Size(370, CalculateDetailHeight()) : new Size(320, CalculateCollapsedHeight());
+        var changed = false;
+
+        if (Size != desiredSize)
+        {
+            Size = desiredSize;
+            changed = true;
+        }
+
+        if (_detailView.Visible != showDetail)
+        {
+            _detailView.Visible = showDetail;
+            changed = true;
+        }
+
+        if (_collapsedDockView.Visible == showDetail)
+        {
+            _collapsedDockView.Visible = !showDetail;
+            changed = true;
+        }
+
+        if (changed || force)
+        {
+            ApplyRoundedRegion();
+            Invalidate();
+        }
+    }
+
+    private int CalculateDetailHeight()
+    {
+        var height = 20;
+        foreach (var snapshot in _providerSnapshots)
+        {
+            if (_providerCards.TryGetValue(snapshot.ProviderId, out var card))
+            {
+                height += card.Height + card.Margin.Bottom;
+            }
+            else
+            {
+                height += 104;
+            }
+        }
+
+        return Math.Max(104, height);
+    }
+
+    private int CalculateCollapsedHeight()
+    {
+        return Math.Max(32, 6 + _providerSnapshots.Count * 28);
+    }
+
+    private void ShowAgyToastIfNeeded()
+    {
+        if (!_settings.EnableAntigravity)
+        {
+            return;
+        }
+
+        var agy = _providerSnapshots.FirstOrDefault(snapshot => snapshot.ProviderId == "agy");
+        if (agy is null || agy.Status is not (QuotaProviderStatus.Offline or QuotaProviderStatus.Failed))
+        {
+            return;
+        }
+
+        var message = agy.ErrorMessage ?? "AGY offline";
+        var now = DateTime.Now;
+        if (string.Equals(_lastAgyToastKey, message, StringComparison.Ordinal) && now - _lastAgyToastAt < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        _lastAgyToastKey = message;
+        _lastAgyToastAt = now;
+        _toast?.Close();
+        _toast?.Dispose();
+        _toast = new HudToastForm(message);
+        _toast.ShowNear(this);
+    }
+
+    private bool EnsureEnabledProviderPlaceholders()
+    {
+        if (!_settings.EnableAntigravity || _providerSnapshots.Any(snapshot => snapshot.ProviderId == "agy"))
+        {
+            return false;
+        }
+
+        _providerSnapshots.Add(new ProviderQuotaSnapshot
+        {
+            ProviderId = "agy",
+            DisplayName = "AGY",
+            Subtitle = "Gemini",
+            Source = "Managed AGY",
+            Status = QuotaProviderStatus.Refreshing,
+            Buckets = CreateEmptyBuckets("gemini-weekly", "gemini-5h")
+        });
+        return true;
+    }
+
+    private static List<ProviderQuotaSnapshot> CreateInitialSnapshots()
+    {
+        return new List<ProviderQuotaSnapshot>
+        {
+            new()
+            {
+                ProviderId = "codex",
+                DisplayName = "Codex",
+                Source = "Codex CLI",
+                Status = QuotaProviderStatus.Refreshing,
+                UpdatedAt = DateTime.Now,
+                Buckets = CreateEmptyBuckets("codex-7d", "codex-5h")
+            }
+        };
+    }
+
+    private static List<QuotaBucketSnapshot> CreateEmptyBuckets(string sevenDayId, string fiveHourId)
+    {
+        return new List<QuotaBucketSnapshot>
+        {
+            new() { Id = sevenDayId, Label = "7d", ShortLabel = "7d" },
+            new() { Id = fiveHourId, Label = "5h", ShortLabel = "5h" }
+        };
     }
 
     private void ToggleVisible()
@@ -366,13 +469,14 @@ public sealed class MainHudForm : Form
 
     private void ExitApplication()
     {
+        _isExiting = true;
         _notifyIcon.Visible = false;
         Application.Exit();
     }
 
     private void MainHudForm_FormClosing(object? sender, FormClosingEventArgs e)
     {
-        if (e.CloseReason == CloseReason.UserClosing)
+        if (!_isExiting && e.CloseReason == CloseReason.UserClosing)
         {
             e.Cancel = true;
             Hide();
@@ -389,6 +493,12 @@ public sealed class MainHudForm : Form
 
     private void WireMouseEvents(Control control)
     {
+        control.MouseDown -= Hud_MouseDown;
+        control.MouseMove -= Hud_MouseMove;
+        control.MouseUp -= Hud_MouseUp;
+        control.MouseEnter -= Hud_MouseEnter;
+        control.MouseLeave -= Hud_MouseLeave;
+
         control.MouseDown += Hud_MouseDown;
         control.MouseMove += Hud_MouseMove;
         control.MouseUp += Hud_MouseUp;
@@ -418,7 +528,7 @@ public sealed class MainHudForm : Form
         {
             _isDocked = false;
             _isExpanded = true;
-            ShowCurrentView();
+            ShowCurrentView(force: true);
         }
 
         _isDragging = true;
@@ -453,7 +563,7 @@ public sealed class MainHudForm : Form
         if (_isDocked && !_isDragging)
         {
             _isExpanded = true;
-            ShowCurrentView();
+            ShowCurrentView(force: true);
         }
     }
 
@@ -468,7 +578,7 @@ public sealed class MainHudForm : Form
         if (!ClientRectangle.Contains(clientPoint))
         {
             _isExpanded = false;
-            ShowCurrentView();
+            ShowCurrentView(force: true);
         }
     }
 
@@ -480,13 +590,13 @@ public sealed class MainHudForm : Form
             _isDocked = true;
             _isExpanded = false;
             Location = new Point(Left, workingArea.Top);
-            ShowCurrentView();
+            ShowCurrentView(force: true);
         }
         else
         {
             _isDocked = false;
             _isExpanded = true;
-            ShowCurrentView();
+            ShowCurrentView(force: true);
         }
     }
 
@@ -518,5 +628,14 @@ public sealed class MainHudForm : Form
         path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
         path.CloseFigure();
         return path;
+    }
+
+    private sealed class BufferedFlowLayoutPanel : FlowLayoutPanel
+    {
+        public BufferedFlowLayoutPanel()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            DoubleBuffered = true;
+        }
     }
 }

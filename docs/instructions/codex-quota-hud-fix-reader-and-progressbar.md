@@ -356,8 +356,8 @@ public Color TextColor { get; set; }
 轨道背景: #2A2F36
 文字颜色: #F2F4F8
 7d 进度条: #4EA1FF
-5h 进度条: #FFB454
-错误文字: #FFB454
+5h 进度条: #C2410C
+错误文字: #C2410C
 ```
 
 C# 可用：

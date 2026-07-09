@@ -15,6 +15,7 @@ public sealed class SettingsForm : Form
     };
 
     private readonly ComboBox _autoRefreshCombo = new();
+    private readonly CheckBox _enableAntigravityCheck = new();
     private readonly TextBox _sevenDayColorBox = new();
     private readonly TextBox _fiveHourColorBox = new();
     private readonly TextBox _trackColorBox = new();
@@ -23,6 +24,7 @@ public sealed class SettingsForm : Form
     private readonly Panel _fiveHourSwatch = new();
     private readonly Panel _trackSwatch = new();
     private readonly Panel _trackBorderSwatch = new();
+    private readonly ToolTip _toolTip = new();
 
     public AppSettings ResultSettings { get; private set; }
 
@@ -35,7 +37,7 @@ public sealed class SettingsForm : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(390, 288);
+        ClientSize = new Size(334, 322);
         BackColor = Color.FromArgb(245, 247, 250);
         Font = new Font(FontFamily.GenericSansSerif, 9f);
 
@@ -46,6 +48,16 @@ public sealed class SettingsForm : Form
     public static bool IsValidHexColor(string? value)
     {
         return !string.IsNullOrWhiteSpace(value) && HexColorRegex.IsMatch(value);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _toolTip.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private void BuildUi()
@@ -73,23 +85,27 @@ public sealed class SettingsForm : Form
             _autoRefreshCombo.Items.Add(option.Text);
         }
 
+        _enableAntigravityCheck.Text = "Enable Antigravity";
+        _enableAntigravityCheck.Location = new Point(14, 106);
+        _enableAntigravityCheck.Size = new Size(180, 24);
+
         var colorsLabel = new Label
         {
             Text = "Colors",
             Font = new Font(FontFamily.GenericSansSerif, 9f, FontStyle.Bold),
-            Location = new Point(14, 106),
+            Location = new Point(14, 138),
             Size = new Size(120, 20)
         };
 
-        AddColorRow("7d Color", _sevenDayColorBox, _sevenDaySwatch, y: 132, addChangeButton: false);
-        AddColorRow("5h Color", _fiveHourColorBox, _fiveHourSwatch, y: 162, addChangeButton: false);
-        AddColorRow("Track Color", _trackColorBox, _trackSwatch, y: 192, addChangeButton: false);
-        AddColorRow("Track Border Color", _trackBorderColorBox, _trackBorderSwatch, y: 222, addChangeButton: true);
+        AddColorRow("7d Color", _sevenDayColorBox, _sevenDaySwatch, y: 164);
+        AddColorRow("5h Color", _fiveHourColorBox, _fiveHourSwatch, y: 194);
+        AddColorRow("Track Color", _trackColorBox, _trackSwatch, y: 224);
+        AddColorRow("Track Border", _trackBorderColorBox, _trackBorderSwatch, y: 254);
 
         var resetDefaultsButton = new Button
         {
             Text = "Reset Defaults",
-            Location = new Point(14, 256),
+            Location = new Point(14, 290),
             Size = new Size(110, 26)
         };
         resetDefaultsButton.Click += (_, _) => LoadFields(AppSettings.Default());
@@ -98,14 +114,14 @@ public sealed class SettingsForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(254, 256),
+            Location = new Point(198, 290),
             Size = new Size(58, 26)
         };
 
         var saveButton = new Button
         {
             Text = "Save",
-            Location = new Point(318, 256),
+            Location = new Point(262, 290),
             Size = new Size(58, 26)
         };
         saveButton.Click += SaveButton_Click;
@@ -118,6 +134,7 @@ public sealed class SettingsForm : Form
             titleLabel,
             autoRefreshLabel,
             _autoRefreshCombo,
+            _enableAntigravityCheck,
             colorsLabel,
             resetDefaultsButton,
             cancelButton,
@@ -125,45 +142,35 @@ public sealed class SettingsForm : Form
         });
     }
 
-    private void AddColorRow(string labelText, TextBox textBox, Panel swatch, int y, bool addChangeButton)
+    private void AddColorRow(string labelText, TextBox textBox, Panel swatch, int y)
     {
         var label = new Label
         {
             Text = labelText,
             Location = new Point(14, y + 3),
-            Size = new Size(118, 20)
+            Size = new Size(108, 20)
         };
 
-        textBox.Location = new Point(138, y);
+        textBox.Location = new Point(128, y);
         textBox.Size = new Size(110, 24);
         textBox.CharacterCasing = CharacterCasing.Upper;
         textBox.TextChanged += (_, _) => UpdateSwatch(textBox, swatch);
 
-        swatch.Location = new Point(258, y + 1);
+        swatch.Location = new Point(248, y + 1);
         swatch.Size = new Size(34, 22);
         swatch.BorderStyle = BorderStyle.FixedSingle;
+        swatch.Cursor = Cursors.Hand;
+        swatch.Click += (_, _) => PickColor(textBox);
+        _toolTip.SetToolTip(swatch, "Click to choose color");
 
         Controls.AddRange(new Control[] { label, textBox, swatch });
-
-        if (!addChangeButton)
-        {
-            return;
-        }
-
-        var changeButton = new Button
-        {
-            Text = "Change",
-            Location = new Point(302, y - 1),
-            Size = new Size(74, 26)
-        };
-        changeButton.Click += (_, _) => PickColor(textBox);
-        Controls.Add(changeButton);
     }
 
     private void LoadFields(AppSettings settings)
     {
         var optionIndex = Array.FindIndex(RefreshOptions, option => option.Seconds == settings.AutoRefreshSeconds);
         _autoRefreshCombo.SelectedIndex = optionIndex >= 0 ? optionIndex : 1;
+        _enableAntigravityCheck.Checked = settings.EnableAntigravity;
         _sevenDayColorBox.Text = settings.SevenDayColor.ToUpperInvariant();
         _fiveHourColorBox.Text = settings.FiveHourColor.ToUpperInvariant();
         _trackColorBox.Text = settings.TrackColor.ToUpperInvariant();
@@ -176,9 +183,10 @@ public sealed class SettingsForm : Form
 
     private static void UpdateSwatch(TextBox textBox, Panel swatch)
     {
-        swatch.BackColor = IsValidHexColor(textBox.Text)
-            ? ColorTranslator.FromHtml(textBox.Text)
-            : SystemColors.Control;
+        if (IsValidHexColor(textBox.Text))
+        {
+            swatch.BackColor = ColorTranslator.FromHtml(textBox.Text);
+        }
     }
 
     private void PickColor(TextBox textBox)
@@ -213,7 +221,12 @@ public sealed class SettingsForm : Form
             SevenDayColor = _sevenDayColorBox.Text.ToUpperInvariant(),
             FiveHourColor = _fiveHourColorBox.Text.ToUpperInvariant(),
             TrackColor = _trackColorBox.Text.ToUpperInvariant(),
-            TrackBorderColor = _trackBorderColorBox.Text.ToUpperInvariant()
+            TrackBorderColor = _trackBorderColorBox.Text.ToUpperInvariant(),
+            EnableAntigravity = _enableAntigravityCheck.Checked,
+            AntigravityMode = AppSettings.DefaultAntigravityMode,
+            StartAgyHidden = true,
+            CloseManagedAgyOnExit = true,
+            AgyExecutablePath = ResultSettings.AgyExecutablePath
         };
 
         DialogResult = DialogResult.OK;

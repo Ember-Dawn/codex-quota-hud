@@ -72,10 +72,21 @@ public static class SettingsStore
             settings.TrackBorderColor = AppSettings.DefaultTrackBorderColor;
         }
 
+        if (!string.Equals(settings.AntigravityMode, AppSettings.DefaultAntigravityMode, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.AntigravityMode = AppSettings.DefaultAntigravityMode;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.AgyExecutablePath) && !File.Exists(settings.AgyExecutablePath))
+        {
+            settings.AgyExecutablePath = null;
+        }
+
         settings.SevenDayColor = settings.SevenDayColor.ToUpperInvariant();
         settings.FiveHourColor = settings.FiveHourColor.ToUpperInvariant();
         settings.TrackColor = settings.TrackColor.ToUpperInvariant();
         settings.TrackBorderColor = settings.TrackBorderColor.ToUpperInvariant();
+        settings.AntigravityMode = settings.AntigravityMode.ToLowerInvariant();
         return settings;
     }
 }

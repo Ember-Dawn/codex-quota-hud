@@ -8,6 +8,7 @@ public sealed class QuotaBarControl : Control
     private double? _percent;
     private bool _showPercentText = true;
     private bool _showTitle = true;
+    private bool _autoTextColor = true;
     private Color _fillColor = ColorTranslator.FromHtml("#4EA1FF");
     private Color _trackColor = ColorTranslator.FromHtml("#303740");
     private Color _trackBorderColor = ColorTranslator.FromHtml("#7A8796");
@@ -24,55 +25,152 @@ public sealed class QuotaBarControl : Control
     public string Title
     {
         get => _title;
-        set { _title = value; Invalidate(); }
+        set
+        {
+            if (_title == value)
+            {
+                return;
+            }
+
+            _title = value;
+            Invalidate();
+        }
     }
 
     public double? Percent
     {
         get => _percent;
-        set { _percent = value; Invalidate(); }
+        set
+        {
+            if (SamePercent(_percent, value))
+            {
+                return;
+            }
+
+            _percent = value;
+            Invalidate();
+        }
     }
 
     public bool ShowPercentText
     {
         get => _showPercentText;
-        set { _showPercentText = value; Invalidate(); }
+        set
+        {
+            if (_showPercentText == value)
+            {
+                return;
+            }
+
+            _showPercentText = value;
+            Invalidate();
+        }
     }
 
     public bool ShowTitle
     {
         get => _showTitle;
-        set { _showTitle = value; Invalidate(); }
+        set
+        {
+            if (_showTitle == value)
+            {
+                return;
+            }
+
+            _showTitle = value;
+            Invalidate();
+        }
+    }
+
+    public bool AutoTextColor
+    {
+        get => _autoTextColor;
+        set
+        {
+            if (_autoTextColor == value)
+            {
+                return;
+            }
+
+            _autoTextColor = value;
+            Invalidate();
+        }
     }
 
     public Color FillColor
     {
         get => _fillColor;
-        set { _fillColor = value; Invalidate(); }
+        set
+        {
+            if (_fillColor.ToArgb() == value.ToArgb())
+            {
+                return;
+            }
+
+            _fillColor = value;
+            Invalidate();
+        }
     }
 
     public Color TrackColor
     {
         get => _trackColor;
-        set { _trackColor = value; Invalidate(); }
+        set
+        {
+            if (_trackColor.ToArgb() == value.ToArgb())
+            {
+                return;
+            }
+
+            _trackColor = value;
+            Invalidate();
+        }
     }
 
     public Color TrackBorderColor
     {
         get => _trackBorderColor;
-        set { _trackBorderColor = value; Invalidate(); }
+        set
+        {
+            if (_trackBorderColor.ToArgb() == value.ToArgb())
+            {
+                return;
+            }
+
+            _trackBorderColor = value;
+            Invalidate();
+        }
     }
 
     public float TrackBorderWidth
     {
         get => _trackBorderWidth;
-        set { _trackBorderWidth = Math.Max(1f, value); Invalidate(); }
+        set
+        {
+            var normalized = Math.Max(1f, value);
+            if (Math.Abs(_trackBorderWidth - normalized) < 0.01f)
+            {
+                return;
+            }
+
+            _trackBorderWidth = normalized;
+            Invalidate();
+        }
     }
 
     public Color TextColor
     {
         get => _textColor;
-        set { _textColor = value; Invalidate(); }
+        set
+        {
+            if (_textColor.ToArgb() == value.ToArgb())
+            {
+                return;
+            }
+
+            _textColor = value;
+            Invalidate();
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -119,7 +217,7 @@ public sealed class QuotaBarControl : Control
                 text,
                 Font,
                 Rectangle.Round(trackBounds),
-                TextColor,
+                AutoTextColor ? GetTextColorForFill(FillColor) : TextColor,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis);
         }
     }
@@ -134,6 +232,27 @@ public sealed class QuotaBarControl : Control
             (false, true) => percentText,
             _ => string.Empty
         };
+    }
+
+    private static bool SamePercent(double? previous, double? next)
+    {
+        if (!previous.HasValue && !next.HasValue)
+        {
+            return true;
+        }
+
+        if (previous.HasValue != next.HasValue)
+        {
+            return false;
+        }
+
+        return Math.Abs(previous!.Value - next!.Value) < 0.01d;
+    }
+
+    private static Color GetTextColorForFill(Color fillColor)
+    {
+        var brightness = (fillColor.R * 299 + fillColor.G * 587 + fillColor.B * 114) / 1000;
+        return brightness >= 150 ? ColorTranslator.FromHtml("#111827") : Color.White;
     }
 
     private static GraphicsPath RoundedRect(RectangleF bounds, float radius)

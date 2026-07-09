@@ -247,7 +247,7 @@ Settings 保持英文界面。
 
 ```text
 7d Color:           #4EA1FF
-5h Color:           #FFB454
+5h Color:           #C2410C
 Track Color:        #303740
 Track Border Color: #7A8796
 ```

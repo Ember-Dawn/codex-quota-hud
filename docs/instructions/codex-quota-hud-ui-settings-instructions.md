@@ -116,7 +116,7 @@ Use these defaults:
 
 ```text
 7d bar:       #4EA1FF
-5h bar:       #FFB454
+5h bar:       #C2410C
 Track:        #303740
 Track border: #414A55
 Background:   #181C22
@@ -298,7 +298,7 @@ Auto Refresh
 
 Colors
 7d Color  [#4EA1FF      ] [color swatch]
-5h Color  [#FFB454      ] [color swatch]
+5h Color  [#C2410C      ] [color swatch]
 
 [Reset Defaults]              [Cancel] [Save]
 ```
@@ -356,7 +356,7 @@ Examples:
 
 ```text
 #4EA1FF
-#FFB454
+#C2410C
 #22C55E
 ```
 
@@ -392,7 +392,7 @@ It should reset the form fields to:
 ```text
 Auto Refresh: 1 min
 7d Color: #4EA1FF
-5h Color: #FFB454
+5h Color: #C2410C
 ```
 
 Prefer this behavior:
@@ -441,7 +441,7 @@ Suggested JSON format:
 {
   "autoRefreshSeconds": 60,
   "sevenDayColor": "#4EA1FF",
-  "fiveHourColor": "#FFB454"
+  "fiveHourColor": "#C2410C"
 }
 ```
 

@@ -15,8 +15,7 @@ public sealed class CodexQuotaReader
     public async Task<QuotaSnapshot> ReadAsync(CancellationToken cancellationToken = default)
     {
         var codexPath = ResolveCodexPath();
-        AppendLog($"codex: {codexPath}");
-        AppendLog("args: app-server --listen stdio://");
+        AppendLog($"codex provider starting app-server path={codexPath}");
 
         using var timeoutCts = new CancellationTokenSource(TimeoutMilliseconds);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
@@ -121,7 +120,7 @@ public sealed class CodexQuotaReader
                         AppendLog("id=2 received before id=1");
                     }
 
-                    AppendLog("id=2 response: " + Shorten(line, 2000));
+                    AppendLog("codex rate limit response received");
                     ThrowIfError(root);
 
                     if (!root.TryGetProperty("result", out var result))
