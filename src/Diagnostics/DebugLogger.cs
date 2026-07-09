@@ -8,7 +8,7 @@ internal static class DebugLogger
 {
     private const int MaxLineLength = 1000;
     private const long MaxSessionLogBytes = 2 * 1024 * 1024;
-    private const int MaxSessionLogs = 30;
+    private const int MaxSessionLogs = 15;
 
     private static readonly object SyncRoot = new();
     private static string? _logPath;
@@ -149,7 +149,7 @@ internal static class DebugLogger
             var projectedBytes = File.Exists(_logPath) ? new FileInfo(_logPath).Length + encoding.GetByteCount(line) : encoding.GetByteCount(line);
             if (projectedBytes > MaxSessionLogBytes)
             {
-                var finalLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [LOG] Session log reached 2 MB limit. Further diagnostic entries are suppressed.{Environment.NewLine}";
+                var finalLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [LOG] Session log reached 2 MB limit. Further log entries are suppressed.{Environment.NewLine}";
                 var currentBytes = File.Exists(_logPath) ? new FileInfo(_logPath).Length : 0;
                 if (currentBytes + encoding.GetByteCount(finalLine) <= MaxSessionLogBytes)
                 {
@@ -226,8 +226,9 @@ internal static class DebugLogger
                 {
                     file.Delete();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    WriteLineLocked($"[LOG] warning failed to delete old session log file={file.FullName} error={ex.GetType().Name}: {ex.Message}", force: true);
                 }
             }
         }

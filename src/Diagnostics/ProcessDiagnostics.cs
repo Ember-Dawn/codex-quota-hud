@@ -50,11 +50,12 @@ internal static class ProcessDiagnostics
         }
     }
 
-    public static async Task MonitorAsync(string provider, string phase, int targetPid, TimeSpan duration, TimeSpan interval, CancellationToken cancellationToken, string? reason = null)
+    public static async Task<ProcessMonitorSummary> MonitorAsync(string provider, string phase, int targetPid, TimeSpan duration, TimeSpan interval, CancellationToken cancellationToken, string? reason = null)
     {
+        var summary = new ProcessMonitorSummary();
         if (!DebugLogger.IsDiagnosticLoggingEnabled)
         {
-            return;
+            return summary;
         }
 
         try
@@ -82,10 +83,34 @@ internal static class ProcessDiagnostics
                     processes = Array.Empty<ProcessInfoSnapshot>();
                 }
 
+                if (cancellationToken.IsCancellationRequested || !DebugLogger.IsDiagnosticLoggingEnabled)
+                {
+                    break;
+                }
+
                 foreach (var process in processes.OrderBy(process => process.ProcessId))
                 {
+                    if (cancellationToken.IsCancellationRequested || !DebugLogger.IsDiagnosticLoggingEnabled)
+                    {
+                        break;
+                    }
+
                     if (seen.Add(process.ProcessId))
                     {
+                        var relation = DetermineRelation(provider, process, targetPid);
+                        if (relation == "descendant")
+                        {
+                            if (IsGitProcess(process.Name))
+                            {
+                                summary.GitDescendantSeen = true;
+                            }
+
+                            if (process.Name.Equals("conhost", StringComparison.OrdinalIgnoreCase))
+                            {
+                                summary.ConhostDescendantSeen = true;
+                            }
+                        }
+
                         DebugLogger.Log(FormatLogLine(provider, phase, "new-process", process, targetPid, reason));
                     }
                 }
@@ -100,11 +125,14 @@ internal static class ProcessDiagnostics
                 }
             }
 
-            DebugLogger.Log($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-stop targetPid={targetPid} reason={SanitizeField(reason)}");
+            var stopEvent = cancellationToken.IsCancellationRequested ? "monitor-cancelled" : "monitor-stop";
+            DebugLogger.Log($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event={stopEvent} targetPid={targetPid} reason={SanitizeField(reason)} gitDescendantSeen={summary.GitDescendantSeen} conhostDescendantSeen={summary.ConhostDescendantSeen}");
+            return summary;
         }
         catch (Exception ex)
         {
             DebugLogger.LogException($"[PROCESS-DIAG] provider={SanitizeField(provider)} phase={SanitizeField(phase)} event=monitor-failed", ex);
+            return summary;
         }
     }
 
@@ -280,6 +308,12 @@ internal static class ProcessDiagnostics
     private static bool IsInteresting(string processName)
     {
         return !string.IsNullOrWhiteSpace(processName) && InterestingProcessNames.Contains(processName);
+    }
+
+    private static bool IsGitProcess(string processName)
+    {
+        return processName.Equals("git", StringComparison.OrdinalIgnoreCase) ||
+               processName.Equals("git-remote-https", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ReadParentName(int parentProcessId, Dictionary<int, WmiProcessInfo> byPid)

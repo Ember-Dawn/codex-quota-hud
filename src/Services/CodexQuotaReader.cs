@@ -7,8 +7,17 @@ namespace CodexQuotaHud;
 public sealed class CodexQuotaReader
 {
     private const int TimeoutMilliseconds = 12_000;
+    private const bool DisableCodexPluginsForQuotaRead = true;
     private const string InitializeRequest = "{\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-quota-hud\",\"title\":\"Codex Quota HUD\",\"version\":\"0.1.0\"},\"capabilities\":null}}";
     private const string ReadQuotaRequest = "{\"id\":2,\"method\":\"account/rateLimits/read\"}";
+
+    private static readonly CodexLaunchMode PluginsDisabledLaunchMode = new(
+        "plugins-disabled",
+        new[] { "-c", "features.plugins=false", "-c", "features.remote_plugin=false", "app-server", "--listen", "stdio://" });
+
+    private static readonly CodexLaunchMode LegacyLaunchMode = new(
+        "legacy",
+        new[] { "app-server", "--listen", "stdio://" });
 
     private readonly QuotaParser _parser = new();
 
@@ -17,54 +26,63 @@ public sealed class CodexQuotaReader
         var codexPath = ResolveCodexPath();
         DebugLogger.Log($"[CODEX-DIAG] starting codex app-server path={codexPath}");
 
+        if (DisableCodexPluginsForQuotaRead)
+        {
+            try
+            {
+                return await ReadWithLaunchModeAsync(codexPath, PluginsDisabledLaunchMode, usedFallback: false, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                DebugLogger.Log($"[CODEX-DIAG] codex launch mode=plugins-disabled failed; falling back to legacy launch error={Shorten(ex.Message, 180)}");
+            }
+        }
+
+        return await ReadWithLaunchModeAsync(codexPath, LegacyLaunchMode, usedFallback: DisableCodexPluginsForQuotaRead, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<QuotaSnapshot> ReadWithLaunchModeAsync(string codexPath, CodexLaunchMode launchMode, bool usedFallback, CancellationToken cancellationToken)
+    {
+        DebugLogger.Log($"[CODEX-DIAG] codex launch mode={launchMode.Name}");
+        DebugLogger.Log($"[CODEX-DIAG] codex launch args={launchMode.ArgsForLog}");
+
         using var timeoutCts = new CancellationTokenSource(TimeoutMilliseconds);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = codexPath,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8
-            }
-        };
-
-        process.StartInfo.ArgumentList.Add("app-server");
-        process.StartInfo.ArgumentList.Add("--listen");
-        process.StartInfo.ArgumentList.Add("stdio://");
-        ApplyGitNonInteractiveEnvironment(process.StartInfo);
-        DebugLogger.Log("[CODEX-DIAG] codex git non-interactive env applied");
+        using var monitorCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var process = CreateCodexProcess(codexPath, launchMode);
 
         var stderr = new StringBuilder();
+        var rateLimitReadSucceeded = false;
+        var monitorSummary = new ProcessMonitorSummary();
+        Task<ProcessMonitorSummary>? monitorTask = null;
+        Task? stderrTask = null;
 
         try
         {
-            ProcessDiagnostics.LogSnapshot("codex", "before-start", reason: "before-codex-start");
+            ProcessDiagnostics.LogSnapshot("codex", "before-start", reason: $"before-codex-start mode={launchMode.Name}");
             process.Start();
-            DebugLogger.Log($"[CODEX-DIAG] codex app-server started pid={process.Id}");
-            ProcessDiagnostics.LogSnapshot("codex", "after-start", process.Id, "immediately-after-codex-start");
-            _ = Task.Run(() => ProcessDiagnostics.MonitorAsync(
+            DebugLogger.Log($"[CODEX-DIAG] codex app-server started pid={process.Id} launchMode={launchMode.Name}");
+            ProcessDiagnostics.LogSnapshot("codex", "after-start", process.Id, $"immediately-after-codex-start mode={launchMode.Name}");
+            monitorTask = Task.Run(() => ProcessDiagnostics.MonitorAsync(
                 provider: "codex",
                 phase: "monitor",
                 targetPid: process.Id,
                 duration: TimeSpan.FromSeconds(30),
                 interval: TimeSpan.FromMilliseconds(500),
-                cancellationToken: CancellationToken.None,
-                reason: "after-codex-start"));
+                cancellationToken: monitorCts.Token,
+                reason: "codex-refresh"), CancellationToken.None);
         }
         catch (Exception ex)
         {
-            DebugLogger.Log($"[CODEX-DIAG] start error: {Shorten(ex.Message, 180)}");
+            DebugLogger.Log($"[CODEX-DIAG] start error launchMode={launchMode.Name}: {Shorten(ex.Message, 180)}");
             throw new InvalidOperationException(codexPath == "codex" ? "codex not found" : $"failed to start codex: {ex.Message}", ex);
         }
 
-        var stderrTask = Task.Run(async () =>
+        stderrTask = Task.Run(async () =>
         {
             try
             {
@@ -89,15 +107,15 @@ public sealed class CodexQuotaReader
 
         try
         {
-            await process.StandardInput.WriteLineAsync(InitializeRequest.AsMemory(), linkedCts.Token);
-            await process.StandardInput.FlushAsync(linkedCts.Token);
-            await process.StandardInput.WriteLineAsync(ReadQuotaRequest.AsMemory(), linkedCts.Token);
-            await process.StandardInput.FlushAsync(linkedCts.Token);
+            await process.StandardInput.WriteLineAsync(InitializeRequest.AsMemory(), linkedCts.Token).ConfigureAwait(false);
+            await process.StandardInput.FlushAsync(linkedCts.Token).ConfigureAwait(false);
+            await process.StandardInput.WriteLineAsync(ReadQuotaRequest.AsMemory(), linkedCts.Token).ConfigureAwait(false);
+            await process.StandardInput.FlushAsync(linkedCts.Token).ConfigureAwait(false);
 
             var sawInitialize = false;
             while (true)
             {
-                var line = await process.StandardOutput.ReadLineAsync(linkedCts.Token);
+                var line = await process.StandardOutput.ReadLineAsync(linkedCts.Token).ConfigureAwait(false);
                 if (line is null)
                 {
                     throw new InvalidOperationException("app-server exited before rate limit response");
@@ -141,31 +159,51 @@ public sealed class CodexQuotaReader
                         throw new InvalidOperationException("missing result");
                     }
 
+                    rateLimitReadSucceeded = true;
+                    DebugLogger.Log($"[CODEX-DIAG] codex launch mode={launchMode.Name} succeeded");
                     return _parser.ParseRateLimits(result, line);
                 }
             }
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            DebugLogger.Log("[CODEX-DIAG] error: app-server timeout");
+            DebugLogger.Log($"[CODEX-DIAG] error: app-server timeout launchMode={launchMode.Name}");
             throw new TimeoutException("app-server timeout");
         }
         catch (Exception ex)
         {
-            DebugLogger.Log($"[CODEX-DIAG] error: {Shorten(ex.Message, 180)}");
+            DebugLogger.Log($"[CODEX-DIAG] error launchMode={launchMode.Name}: {Shorten(ex.Message, 180)}");
             throw;
         }
         finally
         {
+            monitorCts.Cancel();
+            DebugLogger.Log($"[PROCESS-DIAG] provider=codex phase=monitor event=monitor-cancel-requested targetPid={SafeProcessId(process)} reason=codex-refresh-ended");
             LogBeforeKill(process);
             TryKill(process);
             LogAfterKill(process);
-            try
+
+            if (stderrTask is not null)
             {
-                await stderrTask.WaitAsync(TimeSpan.FromMilliseconds(500));
+                try
+                {
+                    await stderrTask.WaitAsync(TimeSpan.FromMilliseconds(500)).ConfigureAwait(false);
+                }
+                catch
+                {
+                }
             }
-            catch
+
+            if (monitorTask is not null)
             {
+                try
+                {
+                    monitorSummary = await monitorTask.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                }
+                catch
+                {
+                    DebugLogger.Log($"[PROCESS-DIAG] provider=codex phase=monitor event=monitor-wait-timeout targetPid={SafeProcessId(process)} reason=codex-refresh-ended");
+                }
             }
 
             var stderrText = stderr.ToString().Trim();
@@ -173,7 +211,36 @@ public sealed class CodexQuotaReader
             {
                 DebugLogger.Log("[CODEX-DIAG] stderr: " + Shorten(stderrText, 2000));
             }
+
+            DebugLogger.Log($"[CODEX-DIAG] codex child process summary gitDescendantSeen={monitorSummary.GitDescendantSeen} conhostDescendantSeen={monitorSummary.ConhostDescendantSeen} launchMode={launchMode.Name} usedFallback={usedFallback} rateLimitReadSucceeded={rateLimitReadSucceeded}");
         }
+    }
+
+    private static Process CreateCodexProcess(string codexPath, CodexLaunchMode launchMode)
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = codexPath,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            }
+        };
+
+        foreach (var argument in launchMode.Arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        ApplyGitNonInteractiveEnvironment(process.StartInfo);
+        DebugLogger.Log("[CODEX-DIAG] codex git non-interactive env applied");
+        return process;
     }
 
     private static void ApplyGitNonInteractiveEnvironment(ProcessStartInfo startInfo)
@@ -306,11 +373,26 @@ public sealed class CodexQuotaReader
         }
     }
 
-
+    private static int? SafeProcessId(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private static string Shorten(string text, int maxLength)
     {
         text = text.Trim().ReplaceLineEndings(" ");
         return text.Length <= maxLength ? text : text[..maxLength] + "...";
+    }
+
+    private sealed record CodexLaunchMode(string Name, IReadOnlyList<string> Arguments)
+    {
+        public string ArgsForLog => string.Join(' ', Arguments.Select(ProcessDiagnostics.SanitizeForLog));
     }
 }

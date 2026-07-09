@@ -101,13 +101,6 @@ public sealed class QuotaPoller : IAsyncDisposable
                 _agyProvider ??= new ManagedAgyQuotaProvider(_settings);
                 _agyProvider.ApplySettings(_settings);
 
-                if (_agyProvider.NeedsColdStart)
-                {
-                    DebugLogger.Log("[PROCESS-DIAG] provider=agy phase=cold-start-delay event=start delayMs=2000 reason=avoid-codex-agy-start-overlap");
-                    await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
-                    DebugLogger.Log("[PROCESS-DIAG] provider=agy phase=cold-start-delay event=stop delayMs=2000 reason=avoid-codex-agy-start-overlap");
-                }
-
                 try
                 {
                     snapshots.Add(await _agyProvider.RefreshAsync(cancellationToken).ConfigureAwait(false));
