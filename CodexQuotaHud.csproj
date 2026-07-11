@@ -5,14 +5,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ApplicationIcon>app-icon.ico</ApplicationIcon>
+    <ApplicationIcon>assets\app-icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
-
-  <Target Name="GenerateApplicationIcon" BeforeTargets="BeforeBuild;CoreCompile">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;tools\generate-app-icon.ps1&quot; -OutputPath &quot;app-icon.ico&quot;" />
-  </Target>
 </Project>
