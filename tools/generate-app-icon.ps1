@@ -8,10 +8,28 @@ $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Drawing
 
+function New-RoundedRectPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Drawing.RectangleF]$Rect,
+        [Parameter(Mandatory = $true)]
+        [single]$Radius
+    )
+
+    $path = [System.Drawing.Drawing2D.GraphicsPath]::new()
+    $diameter = [single]($Radius * 2.0)
+    $path.AddArc($Rect.X, $Rect.Y, $diameter, $diameter, 180.0, 90.0)
+    $path.AddArc([single]($Rect.Right - $diameter), $Rect.Y, $diameter, $diameter, 270.0, 90.0)
+    $path.AddArc([single]($Rect.Right - $diameter), [single]($Rect.Bottom - $diameter), $diameter, $diameter, 0.0, 90.0)
+    $path.AddArc($Rect.X, [single]($Rect.Bottom - $diameter), $diameter, $diameter, 90.0, 90.0)
+    $path.CloseFigure()
+    return $path
+}
+
 function New-IconBitmap {
     param([int]$Size)
 
-    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $bitmap = [System.Drawing.Bitmap]::new($Size, $Size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
@@ -19,50 +37,66 @@ function New-IconBitmap {
     $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
     try {
-        $scale = $Size / 128.0
+        $scale = [double]$Size / 128.0
+        function S([double]$Value) {
+            return [single]($Value * $scale)
+        }
 
-        $bgRect = New-Object System.Drawing.RectangleF(8 * $scale, 8 * $scale, 112 * $scale, 112 * $scale)
-        $bgPath = New-Object System.Drawing.Drawing2D.GraphicsPath
-        $radius = 22 * $scale
-        $diameter = $radius * 2
-        $bgPath.AddArc($bgRect.X, $bgRect.Y, $diameter, $diameter, 180, 90)
-        $bgPath.AddArc($bgRect.Right - $diameter, $bgRect.Y, $diameter, $diameter, 270, 90)
-        $bgPath.AddArc($bgRect.Right - $diameter, $bgRect.Bottom - $diameter, $diameter, $diameter, 0, 90)
-        $bgPath.AddArc($bgRect.X, $bgRect.Bottom - $diameter, $diameter, $diameter, 90, 90)
-        $bgPath.CloseFigure()
+        $bgRect = [System.Drawing.RectangleF]::new((S 8), (S 8), (S 112), (S 112))
+        $bgPath = New-RoundedRectPath -Rect $bgRect -Radius (S 22)
+        try {
+            $bgBrush = [System.Drawing.Drawing2D.LinearGradientBrush]::new(
+                $bgRect,
+                [System.Drawing.Color]::FromArgb(255, 25, 43, 66),
+                [System.Drawing.Color]::FromArgb(255, 11, 17, 26),
+                [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+            try {
+                $graphics.FillPath($bgBrush, $bgPath)
+            }
+            finally {
+                $bgBrush.Dispose()
+            }
+        }
+        finally {
+            $bgPath.Dispose()
+        }
 
-        $bgBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($bgRect, [System.Drawing.Color]::FromArgb(255, 25, 43, 66), [System.Drawing.Color]::FromArgb(255, 11, 17, 26), [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
-        $graphics.FillPath($bgBrush, $bgPath)
-        $bgBrush.Dispose()
-        $bgPath.Dispose()
-
-        $cPen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 17 * $scale)
-        $cPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Flat
-        $cPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Flat
-        $graphics.DrawArc($cPen, 27 * $scale, 27 * $scale, 67 * $scale, 69 * $scale, 42, 276)
-        $cPen.Dispose()
+        $cPen = [System.Drawing.Pen]::new([System.Drawing.Color]::White, (S 17))
+        try {
+            $cPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Flat
+            $cPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Flat
+            $graphics.DrawArc($cPen, (S 27), (S 27), (S 67), (S 69), 42.0, 276.0)
+        }
+        finally {
+            $cPen.Dispose()
+        }
 
         $barSpecs = @(
-            @{ X = 66; Height = 20; Color = [System.Drawing.Color]::FromArgb(255, 255, 132, 18) },
-            @{ X = 80; Height = 31; Color = [System.Drawing.Color]::FromArgb(255, 255, 160, 25) },
-            @{ X = 94; Height = 43; Color = [System.Drawing.Color]::FromArgb(255, 255, 194, 48) }
+            [PSCustomObject]@{ X = 66.0; Height = 20.0; Color = [System.Drawing.Color]::FromArgb(255, 255, 132, 18) },
+            [PSCustomObject]@{ X = 80.0; Height = 31.0; Color = [System.Drawing.Color]::FromArgb(255, 255, 160, 25) },
+            [PSCustomObject]@{ X = 94.0; Height = 43.0; Color = [System.Drawing.Color]::FromArgb(255, 255, 194, 48) }
         )
-        $baseY = 91
-        $barWidth = 10
+        $baseY = 91.0
+        $barWidth = 10.0
         foreach ($bar in $barSpecs) {
-            $rect = New-Object System.Drawing.RectangleF($bar.X * $scale, ($baseY - $bar.Height) * $scale, $barWidth * $scale, $bar.Height * $scale)
-            $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-            $r = 3 * $scale
-            $d = $r * 2
-            $path.AddArc($rect.X, $rect.Y, $d, $d, 180, 90)
-            $path.AddArc($rect.Right - $d, $rect.Y, $d, $d, 270, 90)
-            $path.AddArc($rect.Right - $d, $rect.Bottom - $d, $d, $d, 0, 90)
-            $path.AddArc($rect.X, $rect.Bottom - $d, $d, $d, 90, 90)
-            $path.CloseFigure()
-            $brush = New-Object System.Drawing.SolidBrush($bar.Color)
-            $graphics.FillPath($brush, $path)
-            $brush.Dispose()
-            $path.Dispose()
+            $rect = [System.Drawing.RectangleF]::new(
+                (S $bar.X),
+                (S ($baseY - $bar.Height)),
+                (S $barWidth),
+                (S $bar.Height))
+            $path = New-RoundedRectPath -Rect $rect -Radius (S 3)
+            try {
+                $brush = [System.Drawing.SolidBrush]::new($bar.Color)
+                try {
+                    $graphics.FillPath($brush, $path)
+                }
+                finally {
+                    $brush.Dispose()
+                }
+            }
+            finally {
+                $path.Dispose()
+            }
         }
     }
     finally {
@@ -74,9 +108,14 @@ function New-IconBitmap {
 
 function Convert-BitmapToPngBytes {
     param([System.Drawing.Bitmap]$Bitmap)
-    $stream = New-Object System.IO.MemoryStream
-    $Bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-    return $stream.ToArray()
+    $stream = [System.IO.MemoryStream]::new()
+    try {
+        $Bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+        return $stream.ToArray()
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Write-UInt16Le {
@@ -85,21 +124,21 @@ function Write-UInt16Le {
 }
 
 function Write-UInt32Le {
-    param([System.IO.BinaryWriter]$Writer, [int]$Value)
+    param([System.IO.BinaryWriter]$Writer, [int64]$Value)
     $Writer.Write([uint32]$Value)
 }
 
 $sizes = @(256, 64, 48, 32, 16)
-$entries = @()
+$entries = New-Object System.Collections.Generic.List[object]
 
 foreach ($size in $sizes) {
     $bitmap = New-IconBitmap -Size $size
     try {
         $pngBytes = Convert-BitmapToPngBytes -Bitmap $bitmap
-        $entries += [PSCustomObject]@{
-            Size = $size
+        $entries.Add([PSCustomObject]@{
+            Size = [int]$size
             Bytes = $pngBytes
-        }
+        })
     }
     finally {
         $bitmap.Dispose()
@@ -111,8 +150,8 @@ if ($outputDirectory) {
     New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 }
 
-$stream = New-Object System.IO.MemoryStream
-$writer = New-Object System.IO.BinaryWriter($stream)
+$stream = [System.IO.MemoryStream]::new()
+$writer = [System.IO.BinaryWriter]::new($stream)
 try {
     Write-UInt16Le $writer 0
     Write-UInt16Le $writer 1
