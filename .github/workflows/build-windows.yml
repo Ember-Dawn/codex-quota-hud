@@ -45,7 +45,7 @@ jobs:
           }
           New-Item -ItemType Directory -Force -Path $env:ARTIFACT_DIR | Out-Null
 
-      - name: Publish no-dotnet exe first
+      - name: Publish no-dotnet exe
         shell: pwsh
         run: |
           $out = '.\publish\no-dotnet'
@@ -70,57 +70,17 @@ jobs:
 
           Copy-Item $exe.FullName "$env:ARTIFACT_DIR\CodexQuotaHud-win-x64-no-dotnet.exe" -Force
 
-      - name: Upload no-dotnet artifact first
+      - name: Upload no-dotnet artifact
         uses: actions/upload-artifact@v7
         with:
           path: .\artifacts\CodexQuotaHud-win-x64-no-dotnet.exe
           archive: false
           if-no-files-found: error
 
-      - name: Publish with-dotnet exe second
-        shell: pwsh
-        run: |
-          $out = '.\publish\with-dotnet'
-          if (Test-Path $out) {
-            Remove-Item $out -Recurse -Force
-          }
-
-          dotnet publish $env:PROJECT_FILE `
-            -c $env:CONFIGURATION `
-            -r $env:RUNTIME_ID `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:DebugType=none `
-            -p:DebugSymbols=false `
-            -p:PublishTrimmed=false `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -o $out
-
-          $exe = Get-ChildItem $out -Filter '*.exe' | Select-Object -First 1
-          if (-not $exe) {
-            throw 'No exe was produced for with-dotnet publish.'
-          }
-
-          Copy-Item $exe.FullName "$env:ARTIFACT_DIR\CodexQuotaHud-win-x64-with-dotnet.exe" -Force
-
-      - name: Upload with-dotnet artifact second
-        uses: actions/upload-artifact@v7
-        with:
-          path: .\artifacts\CodexQuotaHud-win-x64-with-dotnet.exe
-          archive: false
-          if-no-files-found: error
-
-      - name: Upload no-dotnet exe to GitHub Release first
+      - name: Upload no-dotnet exe to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           files: .\artifacts\CodexQuotaHud-win-x64-no-dotnet.exe
           fail_on_unmatched_files: true
           generate_release_notes: true
-
-      - name: Upload with-dotnet exe to GitHub Release second
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          files: .\artifacts\CodexQuotaHud-win-x64-with-dotnet.exe
-          fail_on_unmatched_files: true
